@@ -1,53 +1,49 @@
-# RAG-Resume – AI-Powered Resume Analysis
+# RAG-Resume - AI-Powered Resume Analysis
 
-A comprehensive, local-first resume analysis tool that leverages Retrieval-Augmented Generation (RAG) to process, analyze, and query resumes without relying on external services. Built with privacy and efficiency in mind, this tool allows you to manage and search through resumes using natural language queries.
+A privacy-focused resume analysis tool that uses Retrieval-Augmented Generation (RAG) to process and analyze resumes locally. The application provides a clean, efficient interface for managing and querying resume collections using natural language.
 
-## 🚀 Key Features
+## Key Features
 
-- **Local-First Architecture**: All processing happens on your machine - no data leaves your system
-- **Multi-Format Support**: Process various document types including:
+- **Local Processing**: All data processing occurs on your machine
+- **Document Support**:
   - PDF documents
   - Word documents (DOCX)
-  - Images (PNG, JPG, JPEG) with OCR support
+  - Images (PNG, JPG, JPEG) with OCR
   - Batch processing via ZIP files
-- **Hybrid Search Capabilities**:
-  - Dense vector search using FAISS
-  - Sparse BM25 search for keyword matching
-  - Cross-encoder reranking for improved relevance
-- **Smart Document Processing**:
-  - Automatic text extraction and normalization
-  - Intelligent chunking of documents
-  - Metadata preservation
-- **Flexible Querying**:
+- **Hybrid Search**:
+  - FAISS for vector similarity
+  - BM25 for keyword search
+  - Cross-encoder reranking
+- **Document Processing**:
+  - Text extraction and normalization
+  - Intelligent document chunking
+  - Metadata management
+- **Query Capabilities**:
   - Natural language search
-  - Skill-based ranking
-  - Context-aware responses
-- **Privacy-Focused**:
-  - No external API calls
-  - All data remains on your machine
-  - Optional Tesseract OCR for local image processing
+  - Skill-based filtering
+  - Contextual responses
 
-## 🛠️ Tech Stack
+## Tech Stack
 
-- **Frontend**: Streamlit for interactive web interface
-- **Vector Database**: FAISS (via LangChain) for efficient similarity search
+- **Frontend**: Streamlit
+- **Vector Storage**: FAISS via LangChain
 - **Embeddings**: 
   - Default: `sentence-transformers/all-MiniLM-L6-v2`
-  - Customizable via environment variables
+  - Configurable via environment
 - **Document Processing**:
-  - PyMuPDF for PDF text extraction
-  - python-docx for Word document parsing
-  - Tesseract OCR for image text recognition
-- **NLP & ML**:
-  - LangChain for document processing pipelines
-  - HuggingFace Transformers for embeddings
-  - Cross-encoder models for result reranking
-- **Optional Advanced Features**:
-  - Integration with RAG-Anything for enhanced parsing
-  - Support for multiple LLM providers (OpenAI, Gemini, local models)
-  - Ollama support for local LLM inference
+  - PyMuPDF (PDFs)
+  - python-docx (Word)
+  - Tesseract OCR (images)
+- **NLP Components**:
+  - LangChain pipelines
+  - HuggingFace Transformers
+  - Cross-encoder reranking
+- **Optional Features**:
+  - RAG-Anything integration
+  - Multiple LLM providers
+  - Local LLM support via Ollama
 
-## 📊 System Architecture
+## System Architecture
 
 The application follows a modular architecture with these key components:
 
@@ -71,7 +67,7 @@ The application follows a modular architecture with these key components:
    - Result fusion and ranking
    - Response generation
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -137,7 +133,7 @@ docker-compose up --build
 
 This will set up the application with all dependencies in an isolated container.
 
-## 🎯 Usage Guide
+## Usage Examples
 
 ### Uploading Resumes
 
@@ -188,7 +184,7 @@ This will set up the application with all dependencies in an isolated container.
   - This removes all uploaded files and indexes
   - Starts a fresh session
 
-## 🔍 Advanced Features
+## Advanced Features
 
 ### Document Processing Pipeline
 
@@ -250,7 +246,7 @@ This will set up the application with all dependencies in an isolated container.
    - Customize search parameters
    - Extend with custom parsers
 
-## 🛠️ Development
+## Development
 
 ### Project Structure
 
@@ -262,7 +258,6 @@ RAG-Resume/
 │   ├── resume_nlp.py       # NLP utilities
 │   ├── streamlit_app.py    # Web interface
 │   └── utils.py            # Helper functions
-├── data/                   # Processed data and indexes
 ├── requirements.txt        # Python dependencies
 └── README.md              # This file
 ```
@@ -283,19 +278,11 @@ RAG-Resume/
    - Add new UI components
    - Customize the layout and styling
 
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## 📧 Contact
+## Contact
 
 For questions or feedback, please open an issue on GitHub.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - [LangChain](https://github.com/langchain-ai/langchain) for the LLM framework
 - [HuggingFace](https://huggingface.co/) for transformer models
@@ -307,24 +294,6 @@ For questions or feedback, please open an issue on GitHub.
 - **Analytics Dashboard**:
   - Score distribution visualization
   - Top candidate ranking
-## Project Structure
-
-```
-app/
-  streamlit_app.py          # Main Streamlit application
-  raglib/
-    config.py              # Application configuration and paths
-    commands.py            # CLI command parsing
-    parsing.py             # Document parsing (PDF, DOCX, images)
-    chunking.py            # Text chunking and section detection
-    embeddings.py          # Text embedding utilities
-    vector_store.py        # FAISS vector store implementation (via LangChain)
-    scoring.py             # Candidate ranking and scoring
-    storage_local.py       # Local file system operations
-    utils_zip.py           # ZIP file handling
-    analytics.py           # Data analysis and visualization
-```
-
 ## Development
 
 1. **Environment Setup**:
@@ -356,11 +325,14 @@ app/
 
 ## Configuration
 
-The application can be configured using environment variables:
+### Environment Variables
 
-- `RAG_DATA_ROOT`: Root directory for storing application data (default: `./data`)
-- `RAG_EMBED_MODEL`: HuggingFace model for embeddings (default: `sentence-transformers/all-MiniLM-L6-v2`)
-- `TESSERACT_CMD`: Path to Tesseract OCR executable (if not in PATH)
+- `RAG_DATA_ROOT`: Data directory (default: `./data`)
+- `RAG_EMBED_MODEL`: Embedding model (default: `sentence-transformers/all-MiniLM-L6-v2`)
+- `TESSERACT_CMD`: Tesseract OCR path (if not in PATH)
+- `OPENAI_API_KEY`: For OpenAI integration (optional)
+- `GEMINI_API_KEY`: For Gemini integration (optional)
+- `OLLAMA_BASE_URL`: For local Ollama server (default: `http://localhost:11434`)
 
 ## License
 
