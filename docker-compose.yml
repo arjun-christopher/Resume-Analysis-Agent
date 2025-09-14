@@ -1,18 +1,24 @@
 version: "3.8"
 services:
-  api:
+  app:
     build: .
     ports:
-      - "8000:8000"
+      - "8501:8501"
     environment:
       - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}
       - FIREBASE_SA_PATH=/run/secrets/firebase_sa
       - FIREBASE_BUCKET=${FIREBASE_BUCKET}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL}
+      - EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
       - VECTOR_BACKEND=faiss
-      - MAX_WORKERS=6
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_HEADLESS=true
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: streamlit run app/streamlit_app.py --server.port=8501 --server.address=0.0.0.0
     secrets:
       - firebase_sa
+
 secrets:
   firebase_sa:
     file: ./service-account.json
