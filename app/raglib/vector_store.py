@@ -1,42 +1,50 @@
-import json
-import os
-from typing import List, Dict, Any, Tuple
+import os, json
+from pathlib import Path
+from typing import List, Dict, Any
+from langchain_community.vectorstores import FAISS
+from langchain.schema import Document
 import numpy as np
-import faiss
-from .config import settings
 
+from .config import session_paths
+from .embeddings import ensure_embedder
 
-class FaissStore:
-    def __init__(self, dim=384, idx_path=None, meta_path=None):
-        self.dim=dim; self.idx_path=idx_path or settings.VECTOR_PATH; self.meta_path=meta_path or settings.META_PATH
-        self.index = faiss.IndexFlatIP(dim)
-        self.meta: List[Dict[str,Any]] = []
-        self._load()
-    def add(self, vecs: np.ndarray, metas: List[Dict[str,Any]]):
-        if vecs.dtype != np.float32:
-            vecs = vecs.astype(np.float32)
-        self.index.add(vecs); self.meta.extend(metas); self._save()
-    def search(self, qvec: np.ndarray, k=5) -> List[Tuple[float, Dict[str,Any]]]:
-        if qvec.ndim==1:
-            qvec=qvec[None,:]
-        D,I = self.index.search(qvec.astype(np.float32), k)
-        out=[]
-        for s,idx in zip(D[0], I[0]):
-            if idx==-1:
-                continue
-            out.append((float(s), self.meta[idx]))
-        return out
-    def _save(self):
-        faiss.write_index(self.index, self.idx_path)
-        with open(self.meta_path,'w',encoding='utf-8') as f:
-            for m in self.meta:
-                f.write(json.dumps(m)+"\n")
-    def _load(self):
-        if os.path.exists(self.idx_path):
-            self.index = faiss.read_index(self.idx_path)
-        if os.path.exists(self.meta_path):
-            with open(self.meta_path,'r',encoding='utf-8') as f:
-                self.meta=[json.loads(line) for line in f]
+# Paths: faiss + store.pkl under vectors_dir
+def _index_paths(session_id: str):
+    p = session_paths(session_id).vectors_dir
+    return p/"faiss.index", p/"store.pkl"
 
+def load_or_create_store(session_id: str, embedder=None) -> FAISS:
+    embedder = embedder or ensure_embedder()
+    idx_path, store_path = _index_paths(session_id)
+    if idx_path.exists() and store_path.exists():
+        return FAISS.load_local(folder_path=str(session_paths(session_id).vectors_dir),
+                                embeddings=embedder, allow_dangerous_deserialization=True)
+    return FAISS.from_documents(documents=[], embedding=embedder)
 
-VS = FaissStore()
+def add_chunks_to_store(store: FAISS, candidate_id: str, chunks: List[Dict[str,Any]]) -> int:
+    docs = [
+        Document(
+            page_content=c["text"],
+            metadata={"candidate_id": candidate_id, "section": c["section"], "chunk_id": c["id"]}
+        )
+        for c in chunks
+    ]
+    if docs:
+        store.add_documents(docs)
+    return len(docs)
+
+# We'll provide a wrapper saving function
+def save_store(session_id: str, store: FAISS):
+    store.save_local(folder_path=str(session_paths(session_id).vectors_dir))
+
+def search_topk(store: FAISS, query: str, k: int, embedder=None):
+    embedder = embedder or ensure_embedder()
+    docs = store.similarity_search_with_score(query, k=k)
+    out = []
+    for doc, score in docs:
+        out.append({
+            "score": 1.0/(1.0+score) if isinstance(score,(float,int)) else 0.0,  # invert distance-ish
+            "preview": doc.page_content[:400],
+            "metadata": doc.metadata
+        })
+    return out

@@ -1,12 +1,15 @@
 streamlit==1.38.0
 pydantic==2.8.2
-firebase-admin==6.6.0
-google-cloud-storage==2.18.2
-google-cloud-firestore==2.16.0
 PyMuPDF==1.24.10
 python-docx==1.1.2
 pillow==10.4.0
 pytesseract==0.3.13
+
+# LangChain + community integrations
+langchain==0.2.14
+langchain-community==0.2.12
+
+# Embeddings + Vector store (used via LangChain)
 sentence-transformers==3.0.1
 faiss-cpu==1.8.0.post1
 numpy==1.26.4

@@ -1,9 +1,13 @@
-from sentence_transformers import SentenceTransformer
-from .config import settings
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from .config import cfg
 
+_embedder = None
 
-_model = SentenceTransformer(settings.EMBEDDING_MODEL)
+def ensure_embedder():
+    global _embedder
+    if _embedder is None:
+        _embedder = HuggingFaceEmbeddings(model_name=cfg.EMBED_MODEL)
+    return _embedder
 
-
-def embed(texts):
-    return _model.encode(list(texts), convert_to_numpy=True, normalize_embeddings=True)
+def embed_model_name() -> str:
+    return cfg.EMBED_MODEL
