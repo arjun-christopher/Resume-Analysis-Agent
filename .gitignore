@@ -211,3 +211,10 @@ data/
 data/index
 /data/uploads
 /data
+
+#VSCode
+.vscode/settings.json
+.vscode/tasks.json
+.vscode/launch.json
+.vscode/extensions.json
+.history/

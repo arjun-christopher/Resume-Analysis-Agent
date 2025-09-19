@@ -741,36 +741,91 @@ class AdvancedRAGSystem:
         logger.info(f"Added {len(documents)} documents ({len(all_chunks)} chunks) in {processing_time:.2f}s")
     
     def query(self, question: str, **kwargs) -> Dict[str, Any]:
-        """Process query with advanced RAG techniques"""
+        """Process query with advanced RAG techniques and entity-aware analytics"""
         start_time = time.time()
-        
         try:
             # Get recommendations from feedback system
             recommendations = self.feedback_system.get_recommendations(question)
-            
+            # Detect user intent
+            intents = extract_intent(question)
             # Adaptive strategy selection
             strategy = self._select_strategy(question, recommendations)
-            
             # Multi-query generation for RAG fusion
             queries = self._generate_multiple_queries(question) if strategy == RetrievalStrategy.RAG_FUSION else [question]
-            
             # Retrieve relevant documents
             all_docs = []
             for query in queries:
                 docs = self._retrieve_documents(query, strategy)
                 all_docs.extend(docs)
-            
             # Remove duplicates and rerank
             unique_docs = self._deduplicate_documents(all_docs)
             reranked_docs = self._rerank_documents(question, unique_docs)
-            
+
+            # --- Entity-aware analytics ---
+            entity_answer = ""
+            if intents:
+                # Aggregate metadata from top chunks
+                top_metas = [doc.metadata for doc in reranked_docs[:10] if doc.metadata]
+                if "want_emails" in intents:
+                    emails = set()
+                    for meta in top_metas:
+                        emails.update(meta.get("emails", []))
+                    if emails:
+                        entity_answer += f"\n**Emails found:**\n" + "\n".join(sorted(emails))
+                if "want_links" in intents:
+                    links = set()
+                    for meta in top_metas:
+                        links.update(meta.get("social_links", []))
+                    if links:
+                        entity_answer += f"\n**Social/Professional Links:**\n" + "\n".join(sorted(links))
+                if "want_names" in intents:
+                    names = set()
+                    for meta in top_metas:
+                        names.update(meta.get("names", []))
+                    if names:
+                        entity_answer += f"\n**Candidate Names:**\n" + "\n".join(sorted(names))
+                if "want_skills" in intents:
+                    skills = set()
+                    for meta in top_metas:
+                        skills.update(meta.get("skills", []))
+                    if skills:
+                        entity_answer += f"\n**Skills Identified:**\n" + ", ".join(sorted(skills))
+                if "want_ranking" in intents:
+                    # Example: rank by Python/AWS experience
+                    ranking = []
+                    for meta in top_metas:
+                        score = 0
+                        skills = set(meta.get("skills", []))
+                        exp_years = meta.get("experience_years", [])
+                        if "python" in skills:
+                            score += 2
+                        if "aws" in skills:
+                            score += 2
+                        score += sum(exp_years)
+                        ranking.append((meta.get("file", "unknown"), score, skills, exp_years))
+                    ranking.sort(key=lambda x: x[1], reverse=True)
+                    entity_answer += "\n**Candidate Ranking (Python/AWS/Experience):**\n"
+                    for fname, score, skills, exp in ranking[:5]:
+                        entity_answer += f"{fname}: Score={score}, Skills={', '.join(skills)}, Experience={exp}\n"
+                if "want_eda" in intents:
+                    # Show EDA stats if available
+                    for meta in top_metas:
+                        if "readability" in meta:
+                            entity_answer += f"\nReadability: {meta['readability']}\n"
+                        if "skills" in meta:
+                            entity_answer += f"Skills: {', '.join(meta['skills'])}\n"
+                        if "education" in meta:
+                            entity_answer += f"Education: {', '.join(meta['education'])}\n"
+                        if "certifications" in meta:
+                            entity_answer += f"Certifications: {', '.join(meta['certifications'])}\n"
             # Generate response
             response = self._generate_response(question, reranked_docs)
-            
             # Self-correction if enabled
             if self.config.enable_self_correction:
                 response = self._self_correct_response(question, response, reranked_docs)
-            
+            # Combine entity analytics with LLM answer
+            if entity_answer:
+                response = f"{response}\n\n---\n{entity_answer.strip()}"
             # Prepare result
             result = {
                 "answer": response,
@@ -786,16 +841,13 @@ class AdvancedRAGSystem:
                 "processing_time": time.time() - start_time,
                 "recommendations": recommendations
             }
-            
             # Update stats
             self.stats["queries_processed"] += 1
             self.stats["avg_response_time"] = (
                 (self.stats["avg_response_time"] * (self.stats["queries_processed"] - 1) + result["processing_time"])
                 / self.stats["queries_processed"]
             )
-            
             return result
-            
         except Exception as e:
             logger.error(f"Error processing query: {e}")
             return {

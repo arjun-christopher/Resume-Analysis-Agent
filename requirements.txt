@@ -48,6 +48,16 @@ phonenumbers
 rank-bm25
 sentence-splitter
 
+# Advanced resume parsing
+pyresparser
+layoutparser
+pypdf
+
+# For spaCy transformer model, run after install:
+# python -m spacy download en_core_web_trf
+# python -m spacy download en_core_web_sm
+# For transformers NER model, use: dbmdz/bert-large-cased-finetuned-conll03-english
+
 # Embedding models
 instructor
 fastembed
@@ -55,6 +65,8 @@ fastembed
 # Advanced ML frameworks for RAG
 dspy
 haystack
+haystack-core
+farm-haystack[all]
 
 # Graph database
 neo4j
@@ -82,3 +94,10 @@ wordcloud
 
 # Advanced NER & Information Extraction
 spacy-transformers
+
+# Advanced Resume Parsing Libraries
+pyresparser
+layoutparser
+pdf2image
+tesserocr
+transformers[torch]
