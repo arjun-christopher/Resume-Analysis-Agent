@@ -1,18 +1,46 @@
-# app/parsing.py - PDF & DOC/DOCX parsing with names + social links + adaptive chunking
+# app/parsing.py - Advanced resume parsing with comprehensive entity extraction and EDA
 from __future__ import annotations
+import hashlib
+import re
+from collections import Counter
+from collections import defaultdict
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
-import hashlib, re
-import pdfplumber
-from pypdf import PdfReader
-from docx import Document as DocxDocument
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Tuple
 
-# Optional spaCy for more accurate PERSON extraction
+import dateparser
+import phonenumbers
+import pdfplumber
+from docx import Document as DocxDocument
+from pypdf import PdfReader
+
+# Advanced NLP libraries
 try:
     import spacy
-    _NLP = spacy.load("en_core_web_sm")
+    # Try to load transformer model first, fallback to standard
+    try:
+        _NLP = spacy.load("en_core_web_trf")  # Transformer-based model
+    except OSError:
+        _NLP = spacy.load("en_core_web_sm")  # Standard model
 except Exception:
     _NLP = None
+
+try:
+    from transformers import pipeline
+    # Load advanced NER model for better entity extraction
+    _NER_PIPELINE = pipeline("ner", 
+                            model="dbmdz/bert-large-cased-finetuned-conll03-english",
+                            aggregation_strategy="simple")
+except Exception:
+    _NER_PIPELINE = None
+
+try:
+    import textstat
+    _HAS_TEXTSTAT = True
+except ImportError:
+    _HAS_TEXTSTAT = False
 
 # ---------- Config ----------
 ALLOWED = {".pdf", ".doc", ".docx"}
@@ -32,7 +60,51 @@ SOCIAL_PATTERNS = [
 SOCIAL = re.compile("|".join(SOCIAL_PATTERNS), re.IGNORECASE)
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-URL   = re.compile(r"https?://[^\s)>\]]+", re.IGNORECASE)
+URL = re.compile(r"https?://[^\s)>\]]+", re.IGNORECASE)
+PHONE = re.compile(r"(\+?\d[\d\s\-()\.]{7,}\d)")
+DATE_PATTERNS = [
+    r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b",
+    r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
+    r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b",
+    r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b"
+]
+
+# Comprehensive skills database with categories
+SKILLS_DATABASE = {
+    "programming": {
+        "python", "java", "javascript", "typescript", "c++", "c#", "go", "rust", "ruby", "php", 
+        "swift", "kotlin", "scala", "r", "matlab", "perl", "shell", "bash", "powershell"
+    },
+    "web_development": {
+        "html", "css", "react", "angular", "vue", "node.js", "express", "django", "flask", 
+        "fastapi", "spring", "laravel", "rails", "asp.net", "jquery", "bootstrap", "sass", "less"
+    },
+    "databases": {
+        "mysql", "postgresql", "mongodb", "redis", "elasticsearch", "cassandra", "oracle", 
+        "sql server", "sqlite", "dynamodb", "neo4j", "influxdb", "couchdb"
+    },
+    "cloud_platforms": {
+        "aws", "azure", "gcp", "google cloud", "heroku", "digitalocean", "linode", "vultr"
+    },
+    "devops": {
+        "docker", "kubernetes", "jenkins", "gitlab ci", "github actions", "terraform", "ansible", 
+        "puppet", "chef", "vagrant", "prometheus", "grafana", "elk stack", "splunk"
+    },
+    "data_science": {
+        "pandas", "numpy", "scikit-learn", "tensorflow", "pytorch", "keras", "xgboost", 
+        "lightgbm", "spark", "hadoop", "tableau", "power bi", "jupyter", "r studio"
+    },
+    "mobile": {
+        "android", "ios", "react native", "flutter", "ionic", "xamarin", "cordova"
+    },
+    "testing": {
+        "selenium", "cypress", "jest", "mocha", "pytest", "junit", "testng", "cucumber"
+    },
+    "soft_skills": {
+        "leadership", "communication", "teamwork", "problem solving", "project management", 
+        "agile", "scrum", "kanban", "mentoring", "training", "presentation", "negotiation"
+    }
+}
 
 # ---------- Helpers ----------
 def file_sha256(p: Path) -> str:
@@ -42,28 +114,144 @@ def file_sha256(p: Path) -> str:
             h.update(b)
     return h.hexdigest()
 
-def _extract_person_names(text: str) -> List[str]:
-    names = []
+def _extract_comprehensive_entities(text: str) -> Dict[str, Any]:
+    """Extract comprehensive entities using multiple NLP models"""
+    entities = {
+        "names": [],
+        "emails": [],
+        "phones": [],
+        "dates": [],
+        "organizations": [],
+        "locations": [],
+        "skills": [],
+        "certifications": [],
+        "education": [],
+        "experience_years": [],
+        "readability_stats": {}
+    }
+    
+    # Extract emails
+    entities["emails"] = list(set(EMAIL.findall(text)))
+    
+    # Extract phone numbers with validation
+    phone_matches = PHONE.findall(text)
+    validated_phones = []
+    for phone in phone_matches:
+        try:
+            parsed = phonenumbers.parse(phone, None)
+            if phonenumbers.is_valid_number(parsed):
+                validated_phones.append(phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.INTERNATIONAL))
+        except:
+            validated_phones.append(phone)  # Keep original if parsing fails
+    entities["phones"] = list(set(validated_phones))
+    
+    # Extract dates with parsing
+    for pattern in DATE_PATTERNS:
+        date_matches = re.findall(pattern, text, re.IGNORECASE)
+        for match in date_matches:
+            try:
+                parsed_date = dateparser.parse(match)
+                if parsed_date:
+                    entities["dates"].append(parsed_date.strftime("%Y-%m-%d"))
+            except:
+                entities["dates"].append(match)
+    
+    # Advanced NER with spaCy
     if _NLP:
         try:
             doc = _NLP(text)
-            names = [e.text for e in doc.ents if e.label_ == "PERSON"]
+            for ent in doc.ents:
+                if ent.label_ == "PERSON":
+                    entities["names"].append(ent.text)
+                elif ent.label_ in ["ORG", "COMPANY"]:
+                    entities["organizations"].append(ent.text)
+                elif ent.label_ in ["GPE", "LOC"]:
+                    entities["locations"].append(ent.text)
         except Exception:
-            names = []
-    else:
-        # Heuristic: capitalized 2- or 3-word sequences
-        pat = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b")
-        names = pat.findall(text)
-    # De-duplicate & filter short tokens
-    uniq = []
-    seen = set()
-    for n in names:
-        k = n.strip()
-        if len(k.split()) >= 2:
-            key = k.lower()
-            if key not in seen:
-                seen.add(key); uniq.append(k)
-    return uniq
+            pass
+    
+    # Additional NER with transformers
+    if _NER_PIPELINE:
+        try:
+            ner_results = _NER_PIPELINE(text[:512])  # Limit text length for efficiency
+            for result in ner_results:
+                if result["entity_group"] == "PER":
+                    entities["names"].append(result["word"])
+                elif result["entity_group"] == "ORG":
+                    entities["organizations"].append(result["word"])
+                elif result["entity_group"] == "LOC":
+                    entities["locations"].append(result["word"])
+        except Exception:
+            pass
+    
+    # Extract skills with categories
+    skills_found = defaultdict(list)
+    text_lower = text.lower()
+    for category, skills in SKILLS_DATABASE.items():
+        for skill in skills:
+            pattern = r'\b' + re.escape(skill.replace(' ', r'\s+')) + r'\b'
+            if re.search(pattern, text_lower):
+                skills_found[category].append(skill)
+                entities["skills"].append(skill)
+    
+    # Extract experience years
+    exp_patterns = [
+        r"(\d+)\+?\s*years?\s*(?:of\s*)?experience",
+        r"(\d+)\+?\s*yrs?\s*(?:of\s*)?experience",
+        r"experience\s*(?:of\s*)?(\d+)\+?\s*years?",
+        r"(\d+)\+?\s*years?\s*in"
+    ]
+    for pattern in exp_patterns:
+        matches = re.findall(pattern, text_lower)
+        entities["experience_years"].extend([int(m) for m in matches])
+    
+    # Extract certifications (common patterns)
+    cert_patterns = [
+        r"certified\s+([A-Z][A-Za-z\s]+)",
+        r"([A-Z]{2,})\s+certified",
+        r"certification\s+in\s+([A-Za-z\s]+)",
+        r"([A-Z]{3,})\s+certification"
+    ]
+    for pattern in cert_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        entities["certifications"].extend(matches)
+    
+    # Extract education
+    edu_patterns = [
+        r"(bachelor|master|phd|doctorate|mba)\s+(?:of\s+)?(?:science\s+)?(?:in\s+)?([A-Za-z\s]+)",
+        r"(b\.?s\.?|m\.?s\.?|ph\.?d\.?|mba)\s+(?:in\s+)?([A-Za-z\s]+)",
+        r"degree\s+in\s+([A-Za-z\s]+)"
+    ]
+    for pattern in edu_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        for match in matches:
+            if isinstance(match, tuple):
+                entities["education"].append(" ".join(match))
+            else:
+                entities["education"].append(match)
+    
+    # Calculate readability statistics
+    if _HAS_TEXTSTAT:
+        try:
+            entities["readability_stats"] = {
+                "flesch_reading_ease": textstat.flesch_reading_ease(text),
+                "flesch_kincaid_grade": textstat.flesch_kincaid_grade(text),
+                "automated_readability_index": textstat.automated_readability_index(text),
+                "coleman_liau_index": textstat.coleman_liau_index(text),
+                "gunning_fog": textstat.gunning_fog(text),
+                "smog_index": textstat.smog_index(text),
+                "avg_sentence_length": textstat.avg_sentence_length(text),
+                "avg_syllables_per_word": textstat.avg_syllables_per_word(text)
+            }
+        except Exception:
+            pass
+    
+    # Clean and deduplicate
+    for key in entities:
+        if isinstance(entities[key], list):
+            entities[key] = list(set(entities[key]))
+    
+    return entities
 
 def _extract_docx_hyperlinks(doc: DocxDocument) -> List[str]:
     # Collect explicit hyperlink targets from DOCX rels
@@ -119,14 +307,34 @@ def _parse_pdf(p: Path) -> Tuple[str, List[str], Dict[int, List[str]]]:
     return "\n".join(text_parts), sorted(set(urls)), page2urls
 
 def _parse_docx(p: Path) -> Tuple[str, List[str]]:
+    """Enhanced DOCX parsing with better text extraction"""
     d = DocxDocument(str(p))
     paragraphs = [para.text for para in d.paragraphs if para.text.strip()]
+    
+    # Extract table content more intelligently
     tables = []
     for table in d.tables:
         for row in table.rows:
             cells = [c.text.strip() for c in row.cells]
-            if any(cells): tables.append(" | ".join(cells))
-    full = "\n".join(paragraphs + tables)
+            if any(cells):
+                tables.append(" | ".join(cells))
+    
+    # Extract headers and footers
+    headers_footers = []
+    try:
+        for section in d.sections:
+            if section.header:
+                for para in section.header.paragraphs:
+                    if para.text.strip():
+                        headers_footers.append(para.text.strip())
+            if section.footer:
+                for para in section.footer.paragraphs:
+                    if para.text.strip():
+                        headers_footers.append(para.text.strip())
+    except Exception:
+        pass
+    
+    full = "\n".join(paragraphs + tables + headers_footers)
     urls = sorted(set(URL.findall(full) + _extract_docx_hyperlinks(d)))
     return full, urls
 
@@ -175,16 +383,68 @@ def _skills_from_text(text: str) -> List[str]:
     return sorted(set(found))
 
 # ---------- Public API ----------
+def _perform_advanced_eda(text: str, entities: Dict[str, Any]) -> Dict[str, Any]:
+    """Perform advanced exploratory data analysis on resume text"""
+    eda_results = {
+        "text_statistics": {},
+        "keyword_density": {},
+        "semantic_themes": [],
+        "experience_indicators": {},
+        "skill_categories": {},
+        "sentiment_analysis": {}
+    }
+    
+    # Basic text statistics
+    words = text.split()
+    sentences = re.split(r'[.!?]+', text)
+    
+    eda_results["text_statistics"] = {
+        "total_words": len(words),
+        "total_sentences": len([s for s in sentences if s.strip()]),
+        "avg_words_per_sentence": len(words) / max(1, len(sentences)),
+        "unique_words": len(set(word.lower() for word in words if word.isalpha())),
+        "lexical_diversity": len(set(word.lower() for word in words if word.isalpha())) / max(1, len(words))
+    }
+    
+    # Keyword density analysis
+    word_freq = Counter(word.lower() for word in words if word.isalpha() and len(word) > 3)
+    total_words = len(words)
+    for word, count in word_freq.most_common(20):
+        eda_results["keyword_density"][word] = count / total_words
+    
+    # Experience indicators
+    leadership_keywords = ["lead", "manage", "supervise", "direct", "coordinate", "oversee"]
+    technical_keywords = ["develop", "implement", "design", "build", "create", "optimize"]
+    collaboration_keywords = ["collaborate", "team", "work with", "partner", "coordinate"]
+    
+    text_lower = text.lower()
+    eda_results["experience_indicators"] = {
+        "leadership_score": sum(1 for kw in leadership_keywords if kw in text_lower),
+        "technical_score": sum(1 for kw in technical_keywords if kw in text_lower),
+        "collaboration_score": sum(1 for kw in collaboration_keywords if kw in text_lower)
+    }
+    
+    # Skill categorization
+    for category, skills in SKILLS_DATABASE.items():
+        found_skills = [skill for skill in skills if skill in entities.get("skills", [])]
+        if found_skills:
+            eda_results["skill_categories"][category] = found_skills
+    
+    return eda_results
+
 def extract_docs_to_chunks_and_records(paths: List[Path]) -> Tuple[List[str], List[Dict[str,Any]], List[Dict[str,Any]]]:
     """
+    Enhanced extraction with comprehensive entity recognition and EDA
+    
     Returns:
-      chunks: list of strings
-      metas:  list of metadata dicts (file, page, chunk_index, names, emails, social_links, skills)
-      records: list of per-doc summaries
+      chunks: list of strings with semantic meaning
+      metas:  list of metadata dicts with comprehensive entities
+      records: list of per-doc summaries with advanced analytics
     """
     paths = [p for p in paths if p.suffix.lower() in ALLOWED]
     if not paths:
         return [], [], []
+    
     total_bytes = sum(p.stat().st_size for p in paths if p.exists())
     params = _adaptive_params(total_bytes, len(paths))
     CHUNK, OVER = params["chunk"], params["overlap"]
@@ -194,59 +454,86 @@ def extract_docs_to_chunks_and_records(paths: List[Path]) -> Tuple[List[str], Li
     records: List[Dict[str,Any]] = []
 
     for p in paths:
-        full_text, urls, page2urls = ("","",{})
+        full_text = ""
+        urls = []
+        page2urls = {}
+        
+        # Parse document based on type
         if p.suffix.lower() == ".pdf":
             full_text, urls, page2urls = _parse_pdf(p)
-        elif p.suffix.lower() in {".doc",".docx"}:
+        elif p.suffix.lower() in {".doc", ".docx"}:
             full_text, urls = _parse_docx(p)
             page2urls = {}
 
-        if not full_text.strip(): continue
+        if not full_text.strip():
+            continue
 
-        # Entities
-        emails = sorted(set(EMAIL.findall(full_text)))
-        socials = sorted(set([u for u in urls if SOCIAL.search(u)]) or [u for u in URL.findall(full_text) if SOCIAL.search(u)])
-        names  = _extract_person_names(full_text)
-        skills = _skills_from_text(full_text)
-
-        # Chunking
+        # Comprehensive entity extraction
+        entities = _extract_comprehensive_entities(full_text)
+        
+        # Advanced EDA
+        eda_results = _perform_advanced_eda(full_text, entities)
+        
+        # Extract social links
+        socials = sorted(set([u for u in urls if SOCIAL.search(u)]))
+        if not socials:
+            socials = [u for u in URL.findall(full_text) if SOCIAL.search(u)]
+        
+        # Intelligent chunking with semantic boundaries
         doc_chunks = _split_overlap(full_text, CHUNK, OVER)
 
-        # Meta + chunks
+        # Create metadata for each chunk
         for i, ch in enumerate(doc_chunks):
-            # Guess page: map by simple proportion if PDF; otherwise 1
+            # Extract entities specific to this chunk
+            chunk_entities = _extract_comprehensive_entities(ch)
+            
+            # Estimate page number
             page_guess = 1
             if page2urls:
-                # crude page estimate by position in list
                 total_pages = max(page2urls.keys()) if page2urls else 1
                 page_guess = min(total_pages, max(1, round((i+1) / max(1, len(doc_chunks)) * total_pages)))
 
-            metas.append({
+            chunk_meta = {
                 "file": p.name,
                 "path": str(p),
                 "page": page_guess,
                 "chunk_index": i,
-                "emails": emails[:10],
-                "names": names[:10],
-                "social_links": socials[:10],
-                "skills": skills,
+                "emails": chunk_entities["emails"][:5],
+                "names": chunk_entities["names"][:5],
+                "phones": chunk_entities["phones"][:3],
+                "social_links": socials[:5],
+                "skills": chunk_entities["skills"],
+                "organizations": chunk_entities["organizations"][:5],
+                "locations": chunk_entities["locations"][:5],
+                "certifications": chunk_entities["certifications"][:5],
+                "education": chunk_entities["education"][:3],
+                "experience_years": chunk_entities["experience_years"],
                 "char_count": len(ch),
-                "word_count": len(ch.split())
-            })
+                "word_count": len(ch.split()),
+                "readability": chunk_entities.get("readability_stats", {})
+            }
+            metas.append(chunk_meta)
             chunks.append(ch)
 
-        records.append({
+        # Create comprehensive document record
+        record = {
             "file": p.name,
             "path": str(p),
             "file_hash": file_sha256(p),
             "total_chunks": len(doc_chunks),
+            "total_pages": max(page2urls.keys()) if page2urls else 1,
             "file_size": p.stat().st_size,
-            "names": names,
-            "emails": emails,
+            "entities": entities,
+            "eda_analysis": eda_results,
             "social_links": socials,
-            "skills": skills,
-            "chunk_params": {"chunk_size": CHUNK, "overlap": OVER}
-        })
+            "chunk_params": {"chunk_size": CHUNK, "overlap": OVER},
+            "processing_metadata": {
+                "spacy_available": _NLP is not None,
+                "transformers_available": _NER_PIPELINE is not None,
+                "textstat_available": _HAS_TEXTSTAT
+            }
+        }
+        records.append(record)
 
     return chunks, metas, records
    
