@@ -65,8 +65,6 @@ fastembed
 # Advanced ML frameworks for RAG
 dspy
 haystack
-haystack-core
-farm-haystack[all]
 
 # Graph database
 neo4j
@@ -99,5 +97,4 @@ spacy-transformers
 pyresparser
 layoutparser
 pdf2image
-tesserocr
 transformers[torch]

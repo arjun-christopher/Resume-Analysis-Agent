@@ -13,7 +13,7 @@ from parsing import extract_docs_to_chunks_and_records
 from advanced_rag_engine import create_advanced_rag_system
 
 load_dotenv()
-st.set_page_config(page_title="Resume Analysis Agent (RAG)", layout="wide")
+st.set_page_config(page_title="RAG - Resume", layout="wide")
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)

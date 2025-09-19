@@ -23,8 +23,6 @@ try:
 except Exception:
     _HAS_PYRESPARSER = False
 
-
-
 try:
     import layoutparser as lp
     _HAS_LAYOUTPARSER = True
