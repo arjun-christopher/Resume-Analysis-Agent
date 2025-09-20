@@ -27,67 +27,98 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-# Core ML libraries
-try:
-    import torch
-    import torch.nn.functional as F
-    from torch import Tensor
-    _HAS_TORCH = True
-except ImportError:
-    _HAS_TORCH = False
+# Deferred imports for performance - only import when needed
+_HAS_TORCH = None
+_HAS_SENTENCE_TRANSFORMERS = None
+_HAS_FASTEMBED = None
+_HAS_QDRANT = None
+_HAS_WEAVIATE = None
+_HAS_PINECONE = None
 
-# Latest Embedding Models
-try:
-    from sentence_transformers import SentenceTransformer, CrossEncoder
-    _HAS_SENTENCE_TRANSFORMERS = True
-except ImportError:
-    _HAS_SENTENCE_TRANSFORMERS = False
+def _ensure_torch():
+    """Lazy import torch only when needed"""
+    global _HAS_TORCH
+    if _HAS_TORCH is None:
+        try:
+            import torch
+            import torch.nn.functional as F
+            from torch import Tensor
+            _HAS_TORCH = True
+            globals()['torch'] = torch
+            globals()['F'] = F
+            globals()['Tensor'] = Tensor
+        except ImportError:
+            _HAS_TORCH = False
+    return _HAS_TORCH
 
-try:
-    from fastembed import TextEmbedding, SparseTextEmbedding
-    _HAS_FASTEMBED = True
-except ImportError:
-    _HAS_FASTEMBED = False
+def _ensure_sentence_transformers():
+    """Lazy import sentence transformers only when needed"""
+    global _HAS_SENTENCE_TRANSFORMERS
+    if _HAS_SENTENCE_TRANSFORMERS is None:
+        try:
+            from sentence_transformers import SentenceTransformer, CrossEncoder
+            _HAS_SENTENCE_TRANSFORMERS = True
+            globals()['SentenceTransformer'] = SentenceTransformer
+            globals()['CrossEncoder'] = CrossEncoder
+        except ImportError:
+            _HAS_SENTENCE_TRANSFORMERS = False
+    return _HAS_SENTENCE_TRANSFORMERS
 
-# Advanced Vector Databases
-try:
-    import qdrant_client
-    from qdrant_client.models import Distance, VectorParams, PointStruct
-    _HAS_QDRANT = True
-except ImportError:
-    _HAS_QDRANT = False
+def _ensure_fastembed():
+    """Lazy import fastembed only when needed"""
+    global _HAS_FASTEMBED
+    if _HAS_FASTEMBED is None:
+        try:
+            from fastembed import TextEmbedding, SparseTextEmbedding
+            _HAS_FASTEMBED = True
+            globals()['TextEmbedding'] = TextEmbedding
+            globals()['SparseTextEmbedding'] = SparseTextEmbedding
+        except ImportError:
+            _HAS_FASTEMBED = False
+    return _HAS_FASTEMBED
 
-try:
-    import weaviate
-    _HAS_WEAVIATE = True
-except ImportError:
-    _HAS_WEAVIATE = False
+# LangChain imports - deferred for performance
+_HAS_LANGCHAIN = None
 
-try:
-    import pinecone
-    _HAS_PINECONE = True
-except ImportError:
-    _HAS_PINECONE = False
-
-# LangChain v0.1+ imports
-try:
-    from langchain_community.vectorstores import Chroma, FAISS, Qdrant
-    from langchain_community.embeddings import HuggingFaceEmbeddings, HuggingFaceInstructEmbeddings
-    from langchain_community.llms import Ollama
-    from langchain_community.chat_models import ChatOllama
-    from langchain_community.retrievers import BM25Retriever
-    from langchain.text_splitter import RecursiveCharacterTextSplitter, SentenceTransformersTokenTextSplitter
-    from langchain.schema import Document
-    from langchain.retrievers import EnsembleRetriever
-    from langchain.retrievers.document_compressors import CrossEncoderReranker
-    from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
-    from langchain.prompts import ChatPromptTemplate, PromptTemplate
-    from langchain.chains import RetrievalQA
-    from langchain.memory import ConversationBufferMemory
-    from langchain.callbacks import StreamingStdOutCallbackHandler
-    _HAS_LANGCHAIN = True
-except ImportError:
-    _HAS_LANGCHAIN = False
+def _ensure_langchain():
+    """Lazy import langchain only when needed"""
+    global _HAS_LANGCHAIN
+    if _HAS_LANGCHAIN is None:
+        try:
+            from langchain_community.vectorstores import Chroma, FAISS, Qdrant
+            from langchain_community.embeddings import HuggingFaceEmbeddings, HuggingFaceInstructEmbeddings
+            from langchain_community.llms import Ollama
+            from langchain_community.chat_models import ChatOllama
+            from langchain_community.retrievers import BM25Retriever
+            from langchain.text_splitter import RecursiveCharacterTextSplitter, SentenceTransformersTokenTextSplitter
+            from langchain.schema import Document
+            from langchain.retrievers import EnsembleRetriever
+            from langchain.retrievers.document_compressors import CrossEncoderReranker
+            from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
+            from langchain.prompts import ChatPromptTemplate, PromptTemplate
+            from langchain.chains import RetrievalQA
+            from langchain.memory import ConversationBufferMemory
+            from langchain.callbacks import StreamingStdOutCallbackHandler
+            _HAS_LANGCHAIN = True
+            # Add to globals so they can be used
+            globals().update({
+                'Chroma': Chroma, 'FAISS': FAISS, 'Qdrant': Qdrant,
+                'HuggingFaceEmbeddings': HuggingFaceEmbeddings,
+                'HuggingFaceInstructEmbeddings': HuggingFaceInstructEmbeddings,
+                'Ollama': Ollama, 'ChatOllama': ChatOllama,
+                'BM25Retriever': BM25Retriever,
+                'RecursiveCharacterTextSplitter': RecursiveCharacterTextSplitter,
+                'SentenceTransformersTokenTextSplitter': SentenceTransformersTokenTextSplitter,
+                'Document': Document, 'EnsembleRetriever': EnsembleRetriever,
+                'CrossEncoderReranker': CrossEncoderReranker,
+                'ContextualCompressionRetriever': ContextualCompressionRetriever,
+                'ChatPromptTemplate': ChatPromptTemplate, 'PromptTemplate': PromptTemplate,
+                'RetrievalQA': RetrievalQA, 'ConversationBufferMemory': ConversationBufferMemory,
+                'StreamingStdOutCallbackHandler': StreamingStdOutCallbackHandler
+            })
+        except ImportError:
+            _HAS_LANGCHAIN = False
+    return _HAS_LANGCHAIN
 
 # LlamaIndex integration
 try:
@@ -380,7 +411,7 @@ class LLMProviderManager:
                     
             elif provider_type == LLMProvider.OLLAMA:
                 # Only create Ollama as last resort
-                if _HAS_LANGCHAIN:
+                if _ensure_langchain():
                     self.providers[provider_type] = ChatOllama(
                         model=self.config.fallback_llm_model.value,
                         temperature=self.config.temperature,
@@ -467,7 +498,7 @@ class FastEmbedder:
             else:
                 self.model_name = self.config.embedding_model.value
             
-            if _HAS_SENTENCE_TRANSFORMERS:
+            if _ensure_sentence_transformers():
                 self.embedder = SentenceTransformer(self.model_name)
                 self.embed_method = "sentence_transformers"
                 self._is_loaded = True
@@ -479,7 +510,7 @@ class FastEmbedder:
         # Fallback to basic model
         try:
             self.model_name = "all-MiniLM-L6-v2"
-            if _HAS_SENTENCE_TRANSFORMERS:
+            if _ensure_sentence_transformers():
                 self.embedder = SentenceTransformer(self.model_name)
                 self.embed_method = "sentence_transformers"
                 self._is_loaded = True
@@ -545,7 +576,7 @@ class SemanticChunker:
             similarities = []
             
             for i in range(len(sentence_embeddings) - 1):
-                if _HAS_TORCH:
+                if _ensure_torch():
                     sim = F.cosine_similarity(
                         torch.tensor(sentence_embeddings[i]).unsqueeze(0),
                         torch.tensor(sentence_embeddings[i + 1]).unsqueeze(0)
@@ -1047,10 +1078,12 @@ class AdvancedRAGSystem:
                 all_metadata.append(chunk_meta)
         
         # Create LangChain documents
-        langchain_docs = [
-            Document(page_content=chunk, metadata=meta)
-            for chunk, meta in zip(all_chunks, all_metadata)
-        ]
+        langchain_docs = []
+        if _ensure_langchain():
+            langchain_docs = [
+                Document(page_content=chunk, metadata=meta)
+                for chunk, meta in zip(all_chunks, all_metadata)
+            ]
         
         # Setup retrievers
         if self.retriever:
