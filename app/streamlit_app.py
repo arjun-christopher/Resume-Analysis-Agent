@@ -1,5 +1,7 @@
 # app/streamlit_app.py - Focused UI: Upload (auto-index) + Chat
 from __future__ import annotations
+import asyncio
+import os
 import time
 from pathlib import Path
 from typing import List, Dict, Any
@@ -11,6 +13,7 @@ import pandas as pd
 from utils import human_size, list_supported_files, clear_dir, safe_listdir
 from parsing import extract_docs_to_chunks_and_records
 from fast_semantic_rag import create_fast_semantic_rag
+from lightrag_integration import create_hybrid_rag_system, HybridRAGConfig
 
 load_dotenv()
 st.set_page_config(page_title="RAG - Resume", layout="wide")
@@ -22,12 +25,33 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 INDEX_DIR = DATA_DIR / "index"
 INDEX_DIR.mkdir(parents=True, exist_ok=True)
 
+# Initialize hybrid RAG system for enhanced performance
+@st.cache_resource
+def get_rag_agent():
+    """Initialize and cache the RAG agent"""
+    try:
+        # Try to use hybrid system (LightRAG + FastRAG)
+        hybrid_config = HybridRAGConfig(
+            enable_lightrag=True,  # Enable LightRAG if available
+            enable_fast_rag=True,  # Keep FastRAG as fallback
+            query_mode="hybrid",   # Use hybrid querying
+            lightrag_working_dir=str(INDEX_DIR / "lightrag"),
+            openai_api_key=os.getenv("OPENAI_API_KEY")
+        )
+        return create_hybrid_rag_system(str(INDEX_DIR), **hybrid_config.__dict__)
+    except Exception as e:
+        # Fallback to original fast semantic RAG
+        st.warning(f"Using fallback RAG system: {e}")
+        return create_fast_semantic_rag(str(INDEX_DIR))
+
 if "agent" not in st.session_state:
-    st.session_state.agent = create_fast_semantic_rag(str(INDEX_DIR))
+    st.session_state.agent = get_rag_agent()
 if "manifest" not in st.session_state:
     st.session_state.manifest = {}
 if "history" not in st.session_state:
     st.session_state.history = []
+if "agent_initialized" not in st.session_state:
+    st.session_state.agent_initialized = False
 
 st.title("Resume Analysis Agent — RAG")
 
@@ -51,10 +75,24 @@ with st.sidebar:
         with st.spinner(f"Indexing {len(saved_files)} file(s)..."):
             chunks, metas, records = extract_docs_to_chunks_and_records(saved_files)
             if chunks:
-                # Convert to the format expected by fast semantic RAG
+                # Convert to the format expected by the RAG system
                 documents = [chunk.page_content if hasattr(chunk, 'page_content') else str(chunk) for chunk in chunks]
                 metadata = [meta for meta in metas]
-                st.session_state.agent.add_documents(documents, metadata)
+                
+                # Initialize agent if needed (for hybrid system)
+                if hasattr(st.session_state.agent, 'initialize') and not st.session_state.agent_initialized:
+                    with st.spinner("Initializing enhanced RAG system..."):
+                        asyncio.run(st.session_state.agent.initialize())
+                        st.session_state.agent_initialized = True
+                
+                # Add documents to the system
+                if hasattr(st.session_state.agent, 'add_documents'):
+                    if asyncio.iscoroutinefunction(st.session_state.agent.add_documents):
+                        # Async version (hybrid system)
+                        result = asyncio.run(st.session_state.agent.add_documents(documents, metadata))
+                    else:
+                        # Sync version (fast semantic RAG)
+                        result = st.session_state.agent.add_documents(documents, metadata)
         st.success(f"Uploaded & indexed {len(saved_files)} file(s) in {time.time()-start:.2f}s")
 
     st.markdown("---")
@@ -147,16 +185,29 @@ if prompt:
 
     with st.chat_message("assistant"):
         with st.spinner("Analyzing resumes with advanced RAG..."):
-            # Use advanced RAG system
-            result = st.session_state.agent.query(prompt)
+            # Initialize agent if needed (for hybrid system)
+            if hasattr(st.session_state.agent, 'initialize') and not st.session_state.agent_initialized:
+                asyncio.run(st.session_state.agent.initialize())
+                st.session_state.agent_initialized = True
+            
+            # Query the system
+            if hasattr(st.session_state.agent, 'query'):
+                if asyncio.iscoroutinefunction(st.session_state.agent.query):
+                    # Async version (hybrid system)
+                    result = asyncio.run(st.session_state.agent.query(prompt))
+                else:
+                    # Sync version (fast semantic RAG)
+                    result = st.session_state.agent.query(prompt)
+            else:
+                result = {"answer": "Query functionality not available", "processing_time": 0}
             
             # Display main response
             st.markdown(result["answer"])
             
             # Show processing stats
             processing_time = result.get("processing_time", 0)
-            method = result.get("method", "unknown")
-            source_docs = result.get("source_documents", [])
+            method = result.get("method_used", result.get("method", "unknown"))
+            source_docs = result.get("source_documents", result.get("sources", []))
             
             if source_docs:
                 col1, col2, col3 = st.columns(3)

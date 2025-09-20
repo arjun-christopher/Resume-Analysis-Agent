@@ -59,18 +59,62 @@ except ImportError:
 ALLOWED = {".pdf", ".doc", ".docx"}
 MAX_FILES_PER_SESSION = 50
 
-# Social link patterns (extendable)
+# Enhanced social link patterns - handles various styles and formats
 SOCIAL_PATTERNS = [
-    r"https?://(www\.)?linkedin\.com/[A-Za-z0-9_/\-?=%.]+",
+    # LinkedIn patterns (various formats)
+    r"https?://(www\.)?linkedin\.com/in/[A-Za-z0-9_\-/]+",
+    r"https?://(www\.)?linkedin\.com/pub/[A-Za-z0-9_\-/]+",
+    r"https?://(www\.)?linkedin\.com/profile/[A-Za-z0-9_\-/]+",
+    r"linkedin\.com/in/[A-Za-z0-9_\-/]+",  # Without protocol
+    
+    # GitHub patterns (various formats)
     r"https?://(www\.)?github\.com/[A-Za-z0-9_\-./]+",
+    r"github\.com/[A-Za-z0-9_\-./]+",  # Without protocol
+    r"git@github\.com:[A-Za-z0-9_\-./]+",  # Git SSH format
+    
+    # Twitter/X patterns
     r"https?://(www\.)?(x|twitter)\.com/[A-Za-z0-9_\-./]+",
+    r"(x|twitter)\.com/[A-Za-z0-9_\-./]+",  # Without protocol
+    
+    # Portfolio and personal websites
+    r"https?://(www\.)?portfolio\.[A-Za-z0-9_\-./]+",
+    r"https?://[A-Za-z0-9_\-./]+\.portfolio\.[A-Za-z0-9_\-./]+",
+    r"https?://[A-Za-z0-9_\-./]+\.me(/[A-Za-z0-9_\-./]+)?",
+    r"https?://(www\.)?personal\.[A-Za-z0-9_\-./]+",
+    
+    # Professional platforms
     r"https?://(www\.)?kaggle\.com/[A-Za-z0-9_\-./]+",
     r"https?://(www\.)?medium\.com/[A-Za-z0-9_\-./]+",
-    r"https?://(www\.)?personal\.[A-Za-z0-9_\-./]+",
-    r"https?://[A-Za-z0-9_\-./]+\.me(/[A-Za-z0-9_\-./]+)?",
-    r"mailto:[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    r"https?://(www\.)?dev\.to/[A-Za-z0-9_\-./]+",
+    r"https?://(www\.)?stackoverflow\.com/users/[A-Za-z0-9_\-./]+",
+    r"https?://(www\.)?behance\.net/[A-Za-z0-9_\-./]+",
+    r"https?://(www\.)?dribbble\.com/[A-Za-z0-9_\-./]+",
+    
+    # Academic profiles
+    r"https?://(www\.)?researchgate\.net/profile/[A-Za-z0-9_\-./]+",
+    r"https?://(www\.)?scholar\.google\.com/citations\?user=[A-Za-z0-9_\-./]+",
+    r"https?://(www\.)?orcid\.org/[A-Za-z0-9_\-./]+",
+    
+    # Email patterns
+    r"mailto:[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+    
+    # Personal domain patterns (common for developers/designers)
+    r"https?://[A-Za-z0-9_\-]+\.(dev|io|co|tech|design|portfolio)(/[A-Za-z0-9_\-./]+)?",
 ]
+
 SOCIAL = re.compile("|".join(SOCIAL_PATTERNS), re.IGNORECASE)
+
+# Additional patterns for finding social links in different contexts
+HYPERLINKED_SOCIAL_PATTERNS = [
+    # Pattern for "Name (LinkedIn)" or "John Smith (linkedin.com/in/johnsmith)"
+    r"([A-Z][a-z]+(?:\s+[A-Z][a-z]*\.?\s+)?[A-Z][a-z]+)\s*\(([^)]*(?:linkedin|github|twitter)\.com[^)]*)\)",
+    # Pattern for "LinkedIn: linkedin.com/in/profile" 
+    r"(LinkedIn|GitHub|Twitter|Portfolio|Website):\s*([A-Za-z0-9._\-/:.]+)",
+    # Pattern for markdown-style links [Name](url)
+    r"\[([^\]]+)\]\(([^)]*(?:linkedin|github|twitter|portfolio)\.com[^)]*)\)",
+]
+
+HYPERLINKED_SOCIAL = re.compile("|".join(HYPERLINKED_SOCIAL_PATTERNS), re.IGNORECASE)
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 URL = re.compile(r"https?://[^\s)>\]]+", re.IGNORECASE)
@@ -128,7 +172,8 @@ def file_sha256(p: Path) -> str:
     return h.hexdigest()
 
 def _extract_comprehensive_entities(text: str) -> Dict[str, Any]:
-
+    """Enhanced entity extraction with advanced name detection and semantic skills analysis"""
+    
     # --- Ensemble entity extraction ---
     entities = {
         "names": [],
@@ -138,42 +183,446 @@ def _extract_comprehensive_entities(text: str) -> Dict[str, Any]:
         "organizations": [],
         "locations": [],
         "skills": [],
+        "skill_contexts": {},  # Track where skills were found (general, experience, education)
         "certifications": [],
         "education": [],
         "experience_years": [],
         "readability_stats": {}
     }
 
-    # 1. Regex and current pipeline (as before)
-    # ...existing code...
-    # (copy the current regex, spaCy, transformers, skills, experience, certs, education, readability logic here)
-    # ...existing code...
+    # 1. Basic regex extractions
+    entities["emails"] = EMAIL.findall(text)
+    entities["phones"] = PHONE.findall(text)
+    
+    # Extract dates
+    for pattern in DATE_PATTERNS:
+        entities["dates"].extend(re.findall(pattern, text, re.IGNORECASE))
 
-    # 2. pyresparser (if available)
+    # 2. Enhanced name extraction - research-based approach
+    entities["names"] = _extract_names_from_resume(text)
+    
+    # 3. Enhanced skills extraction with context awareness
+    skill_analysis = _extract_skills_with_context(text)
+    entities["skills"] = skill_analysis["skills"]
+    entities["skill_contexts"] = skill_analysis["contexts"]
+    
+    # 4. Extract experience years with better patterns
+    entities["experience_years"] = _extract_experience_years(text)
+    
+    # 5. Extract organizations and locations using spaCy if available
+    if _NLP:
+        try:
+            doc = _NLP(text)
+            for ent in doc.ents:
+                if ent.label_ == "ORG":
+                    entities["organizations"].append(ent.text)
+                elif ent.label_ in ["GPE", "LOC"]:
+                    entities["locations"].append(ent.text)
+                elif ent.label_ == "PERSON" and len(ent.text.split()) <= 3:
+                    # Additional person names from NER
+                    entities["names"].append(ent.text)
+        except Exception:
+            pass
+
+    # 6. Extract certifications and education
+    entities["certifications"] = _extract_certifications(text)
+    entities["education"] = _extract_education(text)
+
+    # 7. Advanced NER with transformers if available
+    if _NER_PIPELINE:
+        try:
+            ner_results = _NER_PIPELINE(text[:512])  # Limit for speed
+            for item in ner_results:
+                if item["entity_group"] == "PER":
+                    entities["names"].append(item["word"])
+                elif item["entity_group"] == "ORG":
+                    entities["organizations"].append(item["word"])
+                elif item["entity_group"] == "LOC":
+                    entities["locations"].append(item["word"])
+        except Exception:
+            pass
+
+    # 8. pyresparser integration (if available)
     if _HAS_PYRESPARSER:
         try:
-            # pyresparser expects a file path, so we skip if not available
-            # For text, use resumepy below
+            # pyresparser expects a file path, skip for text-only processing
             pass
         except Exception:
             pass
 
-
-    # 4. layoutparser (if available)
-    if _HAS_LAYOUTPARSER:
-        try:
-            # Layout-aware entity extraction (for images/PDFs)
-            # This is a placeholder for future integration
-            pass
-        except Exception:
-            pass
-
-    # 5. Deduplicate and clean
+    # 9. Deduplicate and clean all lists
     for key in entities:
         if isinstance(entities[key], list):
-            entities[key] = list(set(entities[key]))
+            # Clean and deduplicate
+            cleaned = []
+            for item in entities[key]:
+                if isinstance(item, str):
+                    cleaned_item = item.strip()
+                    if cleaned_item and len(cleaned_item) > 1:
+                        cleaned.append(cleaned_item)
+                else:
+                    cleaned.append(item)
+            entities[key] = list(dict.fromkeys(cleaned))  # Preserve order while removing duplicates
 
     return entities
+
+
+def _extract_names_from_resume(text: str) -> List[str]:
+    """
+    Research-based name extraction from resumes.
+    Names typically appear in these locations (in order of likelihood):
+    1. First few lines (header section)
+    2. After 'Name:' or similar labels
+    3. In contact information section
+    4. Before email addresses or phone numbers
+    """
+    names = []
+    lines = text.split('\n')
+    
+    # Strategy 1: Check first 5 lines for names (most common location)
+    for i in range(min(5, len(lines))):
+        line = lines[i].strip()
+        if line and not any(x in line.lower() for x in ['email', 'phone', 'address', 'linkedin', 'github', 'http']):
+            # Look for typical name patterns
+            name_candidates = _find_name_patterns(line)
+            names.extend(name_candidates)
+    
+    # Strategy 2: Look for explicit name labels
+    name_labels = ['name:', 'full name:', 'candidate name:', 'applicant:', 'resume of']
+    for line in lines[:10]:  # Check first 10 lines
+        line_lower = line.lower()
+        for label in name_labels:
+            if label in line_lower:
+                # Extract text after the label
+                after_label = line[line_lower.find(label) + len(label):].strip()
+                if after_label:
+                    name_candidates = _find_name_patterns(after_label)
+                    names.extend(name_candidates)
+    
+    # Strategy 3: Names often appear before contact info
+    for i, line in enumerate(lines[:15]):
+        if any(pattern in line.lower() for pattern in ['email', 'phone', '@', 'linkedin']):
+            # Check the line before contact info
+            if i > 0:
+                prev_line = lines[i-1].strip()
+                if prev_line and len(prev_line.split()) <= 4:
+                    name_candidates = _find_name_patterns(prev_line)
+                    names.extend(name_candidates)
+            break
+    
+    # Strategy 4: Look for capitalized words that could be names
+    for line in lines[:8]:
+        words = line.split()
+        if 2 <= len(words) <= 4:  # Typical name length
+            if all(word[0].isupper() for word in words if word.isalpha()):
+                # All words start with capital - likely a name
+                full_name = ' '.join(words)
+                if not any(x in full_name.lower() for x in ['email', 'phone', 'address', 'resume', 'cv']):
+                    names.append(full_name)
+    
+    return names
+
+
+def _find_name_patterns(text: str) -> List[str]:
+    """Find name patterns in a given text line"""
+    names = []
+    
+    # Skip lines that are likely not names
+    skip_keywords = ['email', 'phone', 'address', 'resume', 'cv', 'objective', 'summary', 
+                    'experience', 'education', 'skills', 'linkedin', 'github', 'position', 'engineer']
+    
+    if any(keyword in text.lower() for keyword in skip_keywords):
+        return names
+    
+    # Pattern 1: First Last or First Middle Last (more strict)
+    name_pattern = r'\b([A-Z][a-z]{2,}\s+(?:[A-Z][a-z]*\.?\s+)?[A-Z][a-z]{2,})\b'
+    matches = re.findall(name_pattern, text)
+    for match in matches:
+        # Additional validation - should look like a real name
+        words = match.split()
+        if 2 <= len(words) <= 3 and all(len(word.strip('.')) >= 2 for word in words):
+            names.append(match)
+    
+    # Pattern 2: Handle initials - J. Smith, John A. Smith (more strict)
+    initial_pattern = r'\b([A-Z]\.\s+[A-Z][a-z]{2,}|[A-Z][a-z]{2,}\s+[A-Z]\.\s+[A-Z][a-z]{2,})\b'
+    matches = re.findall(initial_pattern, text)
+    names.extend(matches)
+    
+    return names
+
+
+def _extract_skills_with_context(text: str) -> Dict[str, Any]:
+    """
+    Enhanced skills extraction that tracks context to distinguish between:
+    - General skills (in skills section)
+    - Experience skills (learned during jobs/internships)
+    - Education skills (learned during studies)
+    """
+    result = {
+        "skills": [],
+        "contexts": {}  # skill -> [contexts where found]
+    }
+    
+    # Split text into sections for context analysis
+    sections = _identify_resume_sections(text)
+    
+    # Extract skills from each section with context
+    for section_name, section_text in sections.items():
+        section_skills = _find_skills_in_text(section_text)
+        
+        for skill in section_skills:
+            if skill not in result["skills"]:
+                result["skills"].append(skill)
+            
+            if skill not in result["contexts"]:
+                result["contexts"][skill] = []
+            
+            # Determine specific context within section
+            context = _determine_skill_context(skill, section_text, section_name)
+            if context not in result["contexts"][skill]:
+                result["contexts"][skill].append(context)
+    
+    return result
+
+
+def _identify_resume_sections(text: str) -> Dict[str, str]:
+    """Identify different sections of the resume for context-aware parsing"""
+    sections = {
+        "header": "",
+        "objective": "",
+        "skills": "",
+        "experience": "",
+        "education": "",
+        "projects": "",
+        "certifications": "",
+        "other": ""
+    }
+    
+    lines = text.split('\n')
+    current_section = "header"
+    section_content = []
+    
+    # Common section headers
+    section_keywords = {
+        "skills": ["skills", "technical skills", "core competencies", "technologies", "expertise"],
+        "experience": ["experience", "work experience", "employment", "professional experience", "internship"],
+        "education": ["education", "academic", "qualification", "degree", "university", "college"],
+        "projects": ["projects", "personal projects", "work projects"],
+        "certifications": ["certifications", "certificates", "awards", "achievements"],
+        "objective": ["objective", "summary", "profile", "about"]
+    }
+    
+    for line in lines:
+        line_lower = line.lower().strip()
+        
+        # Check if line is a section header
+        new_section = None
+        for section, keywords in section_keywords.items():
+            if any(keyword in line_lower for keyword in keywords) and len(line.strip()) < 50:
+                new_section = section
+                break
+        
+        if new_section:
+            # Save previous section
+            sections[current_section] = '\n'.join(section_content)
+            current_section = new_section
+            section_content = []
+        else:
+            section_content.append(line)
+    
+    # Save the last section
+    sections[current_section] = '\n'.join(section_content)
+    
+    return sections
+
+
+def _find_skills_in_text(text: str) -> List[str]:
+    """Find skills in text using comprehensive skill database"""
+    found_skills = []
+    text_lower = text.lower()
+    
+    # Check all skill categories
+    for category, skills in SKILLS_DATABASE.items():
+        for skill in skills:
+            # Use word boundaries to avoid partial matches
+            pattern = r'\b' + re.escape(skill.lower()) + r'\b'
+            if re.search(pattern, text_lower):
+                found_skills.append(skill)
+    
+    return found_skills
+
+
+def _determine_skill_context(skill: str, section_text: str, section_name: str) -> str:
+    """Determine the specific context where a skill was mentioned"""
+    text_lower = section_text.lower()
+    skill_lower = skill.lower()
+    
+    # Find the sentence containing the skill
+    sentences = re.split(r'[.!?]+', section_text)
+    skill_sentence = ""
+    for sentence in sentences:
+        if skill_lower in sentence.lower():
+            skill_sentence = sentence.lower()
+            break
+    
+    # Determine context based on section and surrounding text
+    if section_name == "skills":
+        return "general_skills"
+    elif section_name == "experience":
+        if any(word in skill_sentence for word in ["intern", "internship"]):
+            return "internship_skills"
+        elif any(word in skill_sentence for word in ["develop", "built", "created", "implemented"]):
+            return "practical_experience"
+        else:
+            return "work_experience"
+    elif section_name == "education":
+        return "educational_skills"
+    elif section_name == "projects":
+        return "project_skills"
+    else:
+        return f"{section_name}_context"
+
+
+def _extract_experience_years(text: str) -> List[int]:
+    """Extract experience years with enhanced patterns"""
+    years = []
+    
+    # Patterns for experience years
+    patterns = [
+        r'(\d+)\+?\s*years?\s*(?:of\s*)?(?:experience|exp)',
+        r'(\d+)\+?\s*yrs?\s*(?:of\s*)?(?:experience|exp)',
+        r'(?:experience|exp)\s*:?\s*(\d+)\+?\s*years?',
+        r'(\d+)\+?\s*years?\s*in',
+        r'over\s*(\d+)\s*years?',
+        r'more\s*than\s*(\d+)\s*years?'
+    ]
+    
+    for pattern in patterns:
+        matches = re.findall(pattern, text.lower())
+        for match in matches:
+            try:
+                year = int(match)
+                if 0 < year <= 50:  # Reasonable range
+                    years.append(year)
+            except ValueError:
+                continue
+    
+    return years
+
+
+def _extract_certifications(text: str) -> List[str]:
+    """Extract certifications from text"""
+    certifications = []
+    
+    # Common certification patterns
+    cert_patterns = [
+        r'([A-Z]{2,}(?:\s+[A-Z]{2,})*)\s*(?:certified|certification)',
+        r'(?:certified|certification)\s+([A-Z][A-Za-z\s]+)',
+        r'([A-Z][A-Za-z\s]+)\s+(?:certificate|cert)',
+        r'(?:aws|azure|google|microsoft|oracle|cisco|comptia)\s+([A-Za-z\s]+)',
+    ]
+    
+    for pattern in cert_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        certifications.extend(matches)
+    
+    return certifications
+
+
+def _extract_social_links_enhanced(text: str, urls: List[str]) -> List[str]:
+    """
+    Enhanced social links extraction that handles different styles:
+    1. Direct URLs (standard extraction)
+    2. Hyperlinked names (e.g., "John Smith (linkedin.com/in/johnsmith)")
+    3. Website names with hyperlinks (e.g., "LinkedIn: linkedin.com/profile")
+    4. Actual links with hyperlinks (various formats)
+    """
+    socials = []
+    
+    # Strategy 1: Extract from existing URLs list
+    for url in urls:
+        if SOCIAL.search(url):
+            socials.append(url)
+    
+    # Strategy 2: Extract social links directly from text (in case URLs missed some)
+    social_matches = SOCIAL.findall(text)
+    for match in social_matches:
+        # Handle tuple results from regex groups
+        if isinstance(match, tuple):
+            for part in match:
+                if part and any(platform in part.lower() for platform in ['linkedin', 'github', 'twitter', 'portfolio']):
+                    socials.append(part)
+        else:
+            socials.append(match)
+    
+    # Strategy 3: Extract hyperlinked social patterns (Name + link combinations)
+    hyperlinked_matches = HYPERLINKED_SOCIAL.findall(text)
+    for match in hyperlinked_matches:
+        if isinstance(match, tuple) and len(match) == 2:
+            name, url = match
+            # Ensure URL is properly formatted
+            if not url.startswith('http'):
+                if '://' not in url:
+                    url = 'https://' + url
+            socials.append(url)
+    
+    # Strategy 4: Look for social platform mentions with nearby URLs
+    social_platforms = ['linkedin', 'github', 'twitter', 'portfolio', 'website', 'blog']
+    lines = text.split('\n')
+    
+    for i, line in enumerate(lines):
+        line_lower = line.lower()
+        for platform in social_platforms:
+            if platform in line_lower:
+                # Look for URLs in the same line or next few lines
+                search_lines = lines[i:min(i+3, len(lines))]
+                for search_line in search_lines:
+                    urls_in_line = URL.findall(search_line)
+                    for url in urls_in_line:
+                        if platform in url.lower() or any(p in url.lower() for p in social_platforms):
+                            socials.append(url)
+    
+    # Strategy 5: Extract email addresses as social links
+    emails = EMAIL.findall(text)
+    for email in emails:
+        socials.append(f"mailto:{email}")
+    
+    # Clean and deduplicate
+    cleaned_socials = []
+    for social in socials:
+        social = social.strip()
+        if social and len(social) > 5:  # Minimum reasonable length
+            # Normalize URLs
+            if not social.startswith(('http://', 'https://', 'mailto:')):
+                if '@' in social:
+                    social = f"mailto:{social}"
+                else:
+                    social = f"https://{social}"
+            cleaned_socials.append(social)
+    
+    return sorted(set(cleaned_socials))
+
+
+def _extract_education(text: str) -> List[str]:
+    """Extract education information"""
+    education = []
+    
+    # Education degree patterns
+    degree_patterns = [
+        r'(Bachelor(?:\'?s)?(?:\s+of\s+[A-Za-z\s]+)?)',
+        r'(Master(?:\'?s)?(?:\s+of\s+[A-Za-z\s]+)?)',
+        r'(Ph\.?D\.?(?:\s+in\s+[A-Za-z\s]+)?)',
+        r'(MBA)',
+        r'(B\.?[A-Z]\.?(?:\s+[A-Za-z\s]+)?)',
+        r'(M\.?[A-Z]\.?(?:\s+[A-Za-z\s]+)?)',
+        r'(Associate(?:\s+Degree)?)',
+    ]
+    
+    for pattern in degree_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        education.extend(matches)
+    
+    return education
 
 def _extract_docx_hyperlinks(doc: DocxDocument) -> List[str]:
     # Collect explicit hyperlink targets from DOCX rels
@@ -263,16 +712,47 @@ def _parse_docx(p: Path) -> Tuple[str, List[str]]:
 # ---------- Adaptive EDA-informed chunking ----------
 def _adaptive_params(total_bytes: int, file_count: int) -> Dict[str, int]:
     """
-    Scale chunk size & overlap with corpus size.
-    Small corpora => smaller chunks (finer recall)
-    Larger corpora => bigger chunks (better throughput)
+    Enhanced dynamic chunk size adjustment based on total file size and content complexity.
+    
+    Strategy:
+    - Very small files (< 100KB): Use smaller chunks for fine-grained retrieval
+    - Medium files (100KB - 5MB): Use balanced chunks for optimal performance
+    - Large files (> 5MB): Use larger chunks for better throughput
+    - Multiple files: Adjust for processing efficiency
     """
     mb = max(1, total_bytes // (1024*1024))
-    # Base values
-    base = 700
-    # Scale up with size but cap
-    chunk = min(1600, base + int(80 * (mb**0.5)) + file_count*20)
-    overlap = max(120, int(chunk * 0.18))
+    kb = total_bytes // 1024
+    
+    # Base chunk size calculation with multiple factors
+    if kb < 100:  # Very small files
+        base = 400
+        scaling_factor = 30
+    elif kb < 500:  # Small files
+        base = 600
+        scaling_factor = 50
+    elif mb < 1:  # Medium-small files
+        base = 800
+        scaling_factor = 60
+    elif mb < 5:  # Medium files
+        base = 1000
+        scaling_factor = 80
+    else:  # Large files
+        base = 1200
+        scaling_factor = 100
+    
+    # Dynamic scaling based on file size and count
+    chunk = min(2000, base + int(scaling_factor * (mb**0.5)) + file_count*15)
+    
+    # Ensure minimum viable chunk size
+    chunk = max(256, chunk)
+    
+    # Calculate overlap as percentage of chunk size (15-25% range)
+    overlap_percentage = 0.20 if mb > 5 else 0.18 if mb > 1 else 0.15
+    overlap = max(50, int(chunk * overlap_percentage))
+    
+    # Ensure overlap doesn't exceed reasonable limits
+    overlap = min(overlap, chunk // 3)
+    
     return {"chunk": chunk, "overlap": overlap}
 
 def _split_overlap(text: str, chunk: int, overlap: int) -> List[str]:
@@ -396,10 +876,8 @@ def extract_docs_to_chunks_and_records(paths: List[Path]) -> Tuple[List[str], Li
         # Advanced EDA
         eda_results = _perform_advanced_eda(full_text, entities)
         
-        # Extract social links
-        socials = sorted(set([u for u in urls if SOCIAL.search(u)]))
-        if not socials:
-            socials = [u for u in URL.findall(full_text) if SOCIAL.search(u)]
+        # Extract social links with enhanced pattern matching
+        socials = _extract_social_links_enhanced(full_text, urls)
         
         # Intelligent chunking with semantic boundaries
         doc_chunks = _split_overlap(full_text, CHUNK, OVER)
