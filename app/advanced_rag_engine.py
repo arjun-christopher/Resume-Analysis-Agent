@@ -994,7 +994,12 @@ class AdvancedRAGSystem:
             # Add relevance scores to documents
             reranked_docs = []
             for doc, score in scored_docs[:self.config.rerank_top_k]:
-                doc.relevance_score = float(score)
+                try:
+                    doc.relevance_score = float(score)
+                except AttributeError:
+                    # If we can't set the attribute, add it to metadata
+                    if hasattr(doc, 'metadata') and doc.metadata is not None:
+                        doc.metadata['relevance_score'] = float(score)
                 reranked_docs.append(doc)
             
             return reranked_docs
@@ -1002,7 +1007,6 @@ class AdvancedRAGSystem:
         except Exception as e:
             logger.error(f"Error in reranking: {e}")
             return documents[:self.config.rerank_top_k]
-    
     def _generate_response(self, query: str, documents: List[Document]) -> str:
         """Generate response using LLM"""
         if not self.llm:
@@ -1041,13 +1045,13 @@ Answer: Provide a comprehensive answer based on the context. If the information 
         
         correction_prompt = f"""Please review and improve the following answer for accuracy and completeness.
 
-Original Question: {query}
-Current Answer: {response}
+                            Original Question: {query}
+                            Current Answer: {response}
 
-Available Context:
-{documents[0].page_content if documents else "No additional context"}
+                            Available Context:
+                            {documents[0].page_content if documents else "No additional context"}
 
-Improved Answer: Provide a corrected and enhanced version of the answer."""
+                            Improved Answer: Provide a corrected and enhanced version of the answer."""
         
         try:
             corrected = self.llm.invoke(correction_prompt)
