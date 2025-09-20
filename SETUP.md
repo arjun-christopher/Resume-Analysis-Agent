@@ -220,18 +220,19 @@ The system automatically selects the best available model using this priority or
 
 | RAM | Recommended Model | Performance | Use Case |
 |-----|------------------|-------------|----------|
-| 8-16GB | `phi3.5:latest` | Good | Development |
-| 16-32GB | `qwen2.5:14b` | Very Good | Small teams |
-| 32-64GB | `qwen2.5:32b` | Excellent | Production |
-| 64GB+ | `llama3.1:70b` | Outstanding | Enterprise |
+| 8-16GB | `llama2:7b` | Good | Development (Default) |
+| 8-16GB | `deepseek-coder:1.3b` | Good | Lightweight coding |
+| 16-32GB | `mistral:latest` | Very Good | Small teams |
+| 32-64GB | `llama3.2:latest` | Excellent | Production |
+| 64GB+ | `deepseek-coder:latest` | Outstanding | Enterprise coding |
 
 **Custom Model Configuration:**
 ```bash
-# Default model selection
-DEFAULT_LLM_MODEL=qwen2.5:32b
+# Default model selection (user's preference)
+DEFAULT_LLM_MODEL=llama2:7b
 
-# Fallback models (comma-separated)
-FALLBACK_MODELS=llama3.1:70b,mistral-nemo:latest,phi3.5:latest
+# Fallback models (comma-separated, user's preference)
+FALLBACK_MODELS=mistral:latest,llama3.2:latest,deepseek-coder:latest,deepseek-coder:1.3b
 
 # Model-specific settings
 LLAMA_CONTEXT_LENGTH=4096

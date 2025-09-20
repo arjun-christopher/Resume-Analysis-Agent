@@ -216,6 +216,9 @@ logger = logging.getLogger(__name__)
 # Suppress warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
+# Suppress specific transformers warnings for BERT NER models
+warnings.filterwarnings("ignore", message="Some weights of the model checkpoint.*were not used when initializing.*")
+warnings.filterwarnings("ignore", message=".*This IS expected if you are initializing.*")
 
 class EmbeddingModel(Enum):
     """Latest and most powerful embedding models"""
@@ -259,7 +262,7 @@ class RetrievalStrategy(Enum):
 class RAGConfig:
     """Configuration for the enhanced RAG system"""
     embedding_model: EmbeddingModel = EmbeddingModel.BGE_M3
-    llm_model: LLMModel = LLMModel.QWEN2_5_32B
+    llm_model: str = "llama2:7b"  # Changed to string to support user's model choice
     retrieval_strategy: RetrievalStrategy = RetrievalStrategy.ADAPTIVE
     vector_db: str = "qdrant"  # qdrant, weaviate, pinecone, chroma, faiss
     chunk_size: int = 512
@@ -345,8 +348,10 @@ class LLMProvider:
         # Ollama (lowest priority) - local models
         if _HAS_LANGCHAIN:
             try:
+                # Use environment variable or default to user's preferred model
+                default_model = os.getenv("DEFAULT_LLM_MODEL", "llama2:7b")
                 self.providers.append(("ollama", lambda: ChatOllama(
-                    model="llama2:7b",
+                    model=default_model,
                     temperature=0.1,
                     num_predict=1024
                 )))
