@@ -64,7 +64,7 @@ try:
 except ImportError:
     _HAS_BM25 = False
 
-# LangChain for document management
+# LangChain for document management and LLM integrations
 try:
     from langchain.schema import Document
     from langchain_community.llms import Ollama
@@ -72,6 +72,45 @@ try:
     _HAS_LANGCHAIN = True
 except ImportError:
     _HAS_LANGCHAIN = False
+
+# API-based LLM integrations
+try:
+    from langchain_openai import ChatOpenAI
+    _HAS_OPENAI = True
+except ImportError:
+    _HAS_OPENAI = False
+
+try:
+    from langchain_anthropic import ChatAnthropic
+    _HAS_ANTHROPIC = True
+except ImportError:
+    _HAS_ANTHROPIC = False
+
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    _HAS_GOOGLE = True
+except ImportError:
+    _HAS_GOOGLE = False
+
+try:
+    from langchain_groq import ChatGroq
+    _HAS_GROQ = True
+except ImportError:
+    _HAS_GROQ = False
+
+try:
+    from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
+    _HAS_HUGGINGFACE = True
+except ImportError:
+    _HAS_HUGGINGFACE = False
+
+# Environment variables
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    _HAS_DOTENV = True
+except ImportError:
+    _HAS_DOTENV = False
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -104,40 +143,94 @@ class FastSemanticChunker:
         self._init_embedder()
     
     def _init_embedder(self):
-        """Initialize the fastest available embedder"""
+        """Initialize the fastest available embedder with robust error handling"""
+        
+        # Try FastEmbed first (fastest option)
         if _HAS_FASTEMBED:
             try:
-                # FastEmbed is the fastest option
+                logger.info("Attempting to initialize FastEmbed...")
                 self.embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
                 self.embed_method = "fastembed"
-                logger.info("Using FastEmbed for ultra-fast embeddings")
+                logger.info("✅ Successfully initialized FastEmbed for ultra-fast embeddings")
                 return
             except Exception as e:
-                logger.warning(f"FastEmbed failed: {e}")
+                logger.warning(f"❌ FastEmbed initialization failed: {e}")
         
+        # Try SentenceTransformers with multiple fallback models
         if _HAS_SENTENCE_TRANSFORMERS:
-            try:
-                # Lightweight sentence transformers
-                self.embedder = SentenceTransformer("all-MiniLM-L6-v2")  # Very fast
-                self.embed_method = "sentence_transformers"
-                logger.info("Using lightweight SentenceTransformer")
-                return
-            except Exception as e:
-                logger.warning(f"SentenceTransformer failed: {e}")
+            models_to_try = [
+                "all-MiniLM-L6-v2",  # Very fast and lightweight
+                "paraphrase-MiniLM-L3-v2",  # Even smaller fallback
+                "all-MiniLM-L12-v2"  # Slightly larger but more robust
+            ]
+            
+            for model_name in models_to_try:
+                try:
+                    logger.info(f"Attempting to initialize SentenceTransformer with {model_name}...")
+                    
+                    # Set environment variables to avoid PyTorch issues
+                    import os
+                    os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+                    
+                    # Initialize with specific device settings to avoid CUDA issues
+                    self.embedder = SentenceTransformer(
+                        model_name, 
+                        device='cpu',  # Force CPU to avoid CUDA issues
+                        cache_folder=None  # Use default cache
+                    )
+                    self.embed_method = "sentence_transformers"
+                    logger.info(f"✅ Successfully initialized SentenceTransformer with {model_name}")
+                    return
+                    
+                except Exception as e:
+                    logger.warning(f"❌ SentenceTransformer with {model_name} failed: {e}")
+                    continue
         
-        # Fallback to dummy embeddings for testing
+        # Try a simple sklearn-based embedder as additional fallback
+        try:
+            logger.info("Attempting to initialize simple TF-IDF embedder...")
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            self.embedder = TfidfVectorizer(max_features=384, stop_words='english')
+            self.embed_method = "tfidf"
+            logger.info("✅ Successfully initialized TF-IDF embedder as fallback")
+            return
+        except ImportError:
+            logger.warning("❌ scikit-learn not available for TF-IDF fallback")
+        except Exception as e:
+            logger.warning(f"❌ TF-IDF embedder failed: {e}")
+        
+        # Final fallback to dummy embeddings
         self.embed_method = "dummy"
-        logger.warning("Using dummy embeddings - install fastembed or sentence-transformers for real functionality")
+        logger.warning("⚠️  Using dummy embeddings - all embedding methods failed. Install compatible versions of fastembed or sentence-transformers")
     
     def embed_texts(self, texts: List[str]) -> np.ndarray:
-        """Fast text embedding"""
-        if self.embed_method == "fastembed":
-            embeddings = list(self.embedder.embed(texts))
-            return np.array(embeddings)
-        elif self.embed_method == "sentence_transformers":
-            return self.embedder.encode(texts, show_progress_bar=False)
-        else:
-            # Dummy embeddings for testing
+        """Fast text embedding with multiple method support"""
+        try:
+            if self.embed_method == "fastembed":
+                embeddings = list(self.embedder.embed(texts))
+                return np.array(embeddings)
+            
+            elif self.embed_method == "sentence_transformers":
+                return self.embedder.encode(texts, show_progress_bar=False)
+            
+            elif self.embed_method == "tfidf":
+                # For TF-IDF, we need to fit_transform or transform
+                if not hasattr(self.embedder, 'vocabulary_'):
+                    # First time - fit and transform
+                    embeddings = self.embedder.fit_transform(texts)
+                else:
+                    # Already fitted - just transform
+                    embeddings = self.embedder.transform(texts)
+                return embeddings.toarray().astype(np.float32)
+            
+            else:
+                # Dummy embeddings for testing
+                return np.random.random((len(texts), 384)).astype(np.float32)
+                
+        except Exception as e:
+            logger.error(f"Embedding failed with {self.embed_method}: {e}")
+            # Fallback to dummy embeddings
+            logger.warning("Falling back to dummy embeddings")
             return np.random.random((len(texts), 384)).astype(np.float32)
     
     def semantic_chunk(self, text: str, chunk_size: int = 256, similarity_threshold: float = 0.7) -> List[str]:
@@ -431,6 +524,7 @@ class FastSemanticRAG:
         
         # Initialize LLM with existing fallback order
         self.llm = self._init_llm()
+        self.current_llm_provider = None  # Track which provider is being used
         
         # Statistics
         self.stats = {
@@ -444,23 +538,127 @@ class FastSemanticRAG:
         logger.info("FastSemanticRAG initialized successfully")
     
     def _init_llm(self):
-        """Initialize LLM with existing fallback order"""
+        """Initialize LLM with API-first fallback order from .env configuration"""
         if not _HAS_LANGCHAIN:
             logger.warning("LangChain not available")
             return None
         
-        try:
-            # Use Ollama with the configured model
-            llm = Ollama(
-                model=self.config.llm_model,
-                temperature=self.config.temperature,
-                num_predict=self.config.max_tokens
+        # Get fallback order from environment
+        fallback_order = os.getenv('LLM_FALLBACK_ORDER', 'openai,anthropic,google,groq,huggingface,ollama').split(',')
+        
+        # Get common parameters
+        temperature = float(os.getenv('LLM_TEMPERATURE', self.config.temperature))
+        max_tokens = int(os.getenv('LLM_MAX_TOKENS', self.config.max_tokens))
+        timeout = int(os.getenv('LLM_TIMEOUT', 30))
+        
+        logger.info(f"Attempting LLM initialization with fallback order: {fallback_order}")
+        
+        for provider in fallback_order:
+            provider = provider.strip().lower()
+            
+            # Check if provider is enabled
+            if not self._is_provider_enabled(provider):
+                logger.info(f"Skipping {provider} - disabled in configuration")
+                continue
+            
+            try:
+                llm = self._init_provider_llm(provider, temperature, max_tokens, timeout)
+                if llm:
+                    self.current_llm_provider = provider
+                    logger.info(f"Successfully initialized LLM: {provider}")
+                    return llm
+            except Exception as e:
+                logger.warning(f"Failed to initialize {provider}: {e}")
+                continue
+        
+        logger.error("All LLM providers failed to initialize")
+        return None
+    
+    def _is_provider_enabled(self, provider: str) -> bool:
+        """Check if a provider is enabled in configuration"""
+        enable_key = f'ENABLE_{provider.upper()}'
+        return os.getenv(enable_key, 'true').lower() == 'true'
+    
+    def _init_provider_llm(self, provider: str, temperature: float, max_tokens: int, timeout: int):
+        """Initialize specific LLM provider"""
+        
+        if provider == 'openai' and _HAS_OPENAI:
+            api_key = os.getenv('OPENAI_API_KEY')
+            model = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+            if api_key and api_key != 'your_openai_api_key_here':
+                return ChatOpenAI(
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=timeout,
+                    api_key=api_key
+                )
+        
+        elif provider == 'anthropic' and _HAS_ANTHROPIC:
+            api_key = os.getenv('ANTHROPIC_API_KEY')
+            model = os.getenv('ANTHROPIC_MODEL', 'claude-3-haiku-20240307')
+            if api_key and api_key != 'your_anthropic_api_key_here':
+                return ChatAnthropic(
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=timeout,
+                    api_key=api_key
+                )
+        
+        elif provider == 'google' and _HAS_GOOGLE:
+            api_key = os.getenv('GOOGLE_API_KEY')
+            model = os.getenv('GOOGLE_MODEL', 'gemini-pro')
+            if api_key and api_key != 'your_google_api_key_here':
+                return ChatGoogleGenerativeAI(
+                    model=model,
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                    timeout=timeout,
+                    google_api_key=api_key
+                )
+        
+        elif provider == 'groq' and _HAS_GROQ:
+            api_key = os.getenv('GROQ_API_KEY')
+            model = os.getenv('GROQ_MODEL', 'llama3-8b-8192')
+            if api_key and api_key != 'your_groq_api_key_here':
+                return ChatGroq(
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=timeout,
+                    api_key=api_key
+                )
+        
+        elif provider == 'huggingface' and _HAS_HUGGINGFACE:
+            api_key = os.getenv('HUGGINGFACE_API_KEY')
+            model = os.getenv('HUGGINGFACE_MODEL', 'meta-llama/Llama-2-7b-chat-hf')
+            if api_key and api_key != 'your_huggingface_api_key_here':
+                # Create HuggingFace endpoint
+                endpoint = HuggingFaceEndpoint(
+                    repo_id=model,
+                    temperature=temperature,
+                    max_new_tokens=max_tokens,
+                    timeout=timeout,
+                    huggingfacehub_api_token=api_key
+                )
+                return ChatHuggingFace(llm=endpoint)
+        
+        elif provider == 'ollama':
+            # Ollama as fallback (local)
+            model = os.getenv('OLLAMA_MODEL', self.config.llm_model)
+            base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+            ollama_timeout = int(os.getenv('OLLAMA_TIMEOUT', 60))
+            
+            return Ollama(
+                model=model,
+                temperature=temperature,
+                num_predict=max_tokens,
+                timeout=ollama_timeout,
+                base_url=base_url
             )
-            logger.info(f"Initialized LLM: {self.config.llm_model}")
-            return llm
-        except Exception as e:
-            logger.error(f"Failed to initialize LLM: {e}")
-            return None
+        
+        return None
     
     def add_documents(self, documents: List[str], metadata: List[Dict] = None):
         """Add documents to the RAG system with fast processing"""
@@ -571,10 +769,8 @@ class FastSemanticRAG:
                 context = '\n\n'.join([result[0] for result in search_results])
                 llm_response = self._generate_llm_response(question, context)
             
-            # Combine responses
-            final_answer = llm_response
-            if pattern_insights:
-                final_answer += f"\n\n---\n\n{pattern_insights}"
+            # Combine responses with better structure
+            final_answer = self._combine_responses(llm_response, pattern_insights, question)
             
             # Prepare source documents
             source_docs = []
@@ -662,25 +858,151 @@ class FastSemanticRAG:
         return '\n\n'.join(insights)
     
     def _generate_llm_response(self, question: str, context: str) -> str:
-        """Generate LLM response using existing fallback order"""
+        """Generate structured LLM response with proper formatting"""
         if not self.llm:
             return ""
         
-        prompt = f"""Based on the following resume information, please answer the question comprehensively.
+        # Create a structured prompt for better responses
+        prompt = f"""You are a professional resume analyst. Based on the provided resume information, answer the question in a clear, structured format.
 
-Context:
-{context}
+                    RESUME CONTEXT:
+                    {context}
 
-Question: {question}
+                    QUESTION: {question}
 
-Answer:"""
+                    Please provide a comprehensive answer following this structure:
+                    1. **Direct Answer**: Start with a clear, direct response
+                    2. **Key Details**: Provide specific relevant information from the resume
+                    3. **Summary**: Conclude with a brief summary if applicable
+
+                    Use bullet points, headings, and clear formatting for readability.
+
+                    RESPONSE:"""
         
         try:
             response = self.llm.invoke(prompt)
-            return response if isinstance(response, str) else str(response)
+            
+            # Handle different response types from various LLM providers
+            formatted_response = self._format_llm_response(response)
+            
+            return formatted_response
+            
         except Exception as e:
             logger.error(f"LLM generation failed: {e}")
             return ""
+    
+    def _format_llm_response(self, response) -> str:
+        """Format and unwrap LLM response for better presentation"""
+        try:
+            # Handle different response types
+            if hasattr(response, 'content'):
+                # For chat-based responses (ChatOpenAI, ChatAnthropic, etc.)
+                text = response.content
+            elif hasattr(response, 'text'):
+                # For some LLM responses
+                text = response.text
+            elif isinstance(response, str):
+                # Direct string response
+                text = response
+            else:
+                # Convert to string as fallback
+                text = str(response)
+            
+            # Clean and format the response
+            formatted_text = self._clean_and_structure_response(text)
+            
+            return formatted_text
+            
+        except Exception as e:
+            logger.error(f"Response formatting failed: {e}")
+            return str(response) if response else ""
+    
+    def _clean_and_structure_response(self, text: str) -> str:
+        """Clean and structure the LLM response text"""
+        if not text:
+            return ""
+        
+        # Remove excessive whitespace and clean up
+        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)  # Remove triple+ newlines
+        text = re.sub(r'^\s+|\s+$', '', text, flags=re.MULTILINE)  # Remove leading/trailing spaces per line
+        text = text.strip()
+        
+        # Enhance markdown formatting
+        lines = text.split('\n')
+        formatted_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                formatted_lines.append('')
+                continue
+            
+            # Enhance headings
+            if line.startswith('##'):
+                formatted_lines.append(f"\n{line}")
+            elif line.startswith('#'):
+                formatted_lines.append(f"\n{line}")
+            elif line.startswith('**') and line.endswith('**') and len(line) > 4:
+                # Bold headings
+                formatted_lines.append(f"\n{line}")
+            elif line.startswith('- ') or line.startswith('• '):
+                # Bullet points
+                formatted_lines.append(f"  {line}")
+            elif line.startswith(('1.', '2.', '3.', '4.', '5.')):
+                # Numbered lists
+                formatted_lines.append(f"  {line}")
+            else:
+                formatted_lines.append(line)
+        
+        # Join and final cleanup
+        formatted_text = '\n'.join(formatted_lines)
+        
+        # Remove excessive blank lines at start/end
+        formatted_text = re.sub(r'^\n+', '', formatted_text)
+        formatted_text = re.sub(r'\n+$', '', formatted_text)
+        
+        return formatted_text
+    
+    def _combine_responses(self, llm_response: str, pattern_insights: str, question: str) -> str:
+        """Combine LLM response and pattern insights into a well-structured answer"""
+        
+        # If no LLM response, return pattern insights or fallback
+        if not llm_response or llm_response.strip() == "":
+            if pattern_insights:
+                return f"## 📊 **Analysis Results**\n\n{pattern_insights}"
+            else:
+                return "I found relevant information but couldn't generate a complete response. Please try rephrasing your question."
+        
+        # If no pattern insights, return formatted LLM response
+        if not pattern_insights or pattern_insights.strip() == "":
+            return f"## 🤖 **AI Analysis**\n\n{llm_response}"
+        
+        # Combine both responses intelligently
+        question_lower = question.lower()
+        
+        # For specific data queries, prioritize pattern insights
+        if any(word in question_lower for word in ['email', 'contact', 'skill', 'linkedin', 'github', 'experience', 'years']):
+            combined_response = f"""## 🤖 **AI Analysis**
+
+                                {llm_response}
+
+                                ## 📊 **Extracted Data**
+
+                                {pattern_insights}"""
+        
+        # For general queries, prioritize LLM response
+        else:
+            combined_response = f"""## 🤖 **Comprehensive Analysis**
+
+                                {llm_response}
+
+---
+
+## 📋 **Additional Insights**
+
+{pattern_insights}"""
+        
+        return combined_response
     
     def get_system_stats(self) -> Dict[str, Any]:
         """Get comprehensive system statistics"""
@@ -698,7 +1020,8 @@ Answer:"""
             'components': {
                 'chunker_method': self.chunker.embed_method,
                 'vector_store': 'FAISS' if _HAS_FAISS else 'Fallback',
-                'llm_available': self.llm is not None
+                'llm_available': self.llm is not None,
+                'current_llm_provider': self.current_llm_provider
             }
         }
     

@@ -68,11 +68,23 @@ with st.sidebar:
         if len(files) > 20:
             st.caption(f"...and {len(files)-20} more")
 
-    if st.button("Clear Session", use_container_width=True):
-        clear_dir(UPLOAD_DIR); clear_dir(INDEX_DIR)
+    # Single-click Clear Session - resets everything immediately
+    if st.button("Clear Session", use_container_width=True, type="primary"):
+        # Clear directories completely
+        clear_dir(UPLOAD_DIR)
+        clear_dir(INDEX_DIR)
+        
+        # Clear ALL session state variables
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        
+        # Reinitialize essential state from scratch
         st.session_state.agent = create_fast_semantic_rag(str(INDEX_DIR))
-        st.session_state.history.clear()
-        st.success("Cleared all files and index.")
+        st.session_state.history = []
+        st.session_state.manifest = {}
+        
+        # Force complete UI refresh
+        st.rerun()
 
 # ---- Main: Chat ----
 st.subheader("AI-Powered Resume Analysis")
@@ -96,6 +108,7 @@ if not st.session_state.history:
             for ex in examples1:
                 if st.button(f"{ex}", key=f"ex1_{ex[:20]}"):
                     st.session_state.example_query = ex
+                    st.rerun()
         
         with col2:
             st.markdown("**Information Extraction:**")
@@ -109,17 +122,23 @@ if not st.session_state.history:
             for ex in examples2:
                 if st.button(f"{ex}", key=f"ex2_{ex[:20]}"):
                     st.session_state.example_query = ex
+                    st.rerun()
 
 for msg in st.session_state.history:
     with st.chat_message(msg["role"]):
         st.markdown(msg["text"])
 
-# Handle example query selection
+# Handle example query selection first
+example_prompt = None
 if hasattr(st.session_state, 'example_query'):
-    prompt = st.session_state.example_query
+    example_prompt = st.session_state.example_query
     del st.session_state.example_query
-else:
-    prompt = st.chat_input("Ask about the uploaded resumes…")
+
+# Always show the chat input field - this ensures it's persistent
+user_input = st.chat_input("Ask about the uploaded resumes…")
+
+# Use example prompt if available, otherwise use user input
+prompt = example_prompt or user_input
 
 if prompt:
     st.session_state.history.append({"role":"user","text":prompt})
