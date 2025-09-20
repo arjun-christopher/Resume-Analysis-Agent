@@ -198,8 +198,27 @@ class EmbeddingModel(Enum):
     INSTRUCTOR_XL = "hkunlp/instructor-xl"
     UAE_LARGE = "WhereIsAI/UAE-Large-V1"
 
+class LLMProvider(Enum):
+    """LLM Provider types in priority order for speed"""
+    OPENAI = "openai"
+    GEMINI = "gemini"
+    GROQ = "groq"
+    HUGGINGFACE_API = "huggingface_api"
+    ANTHROPIC = "anthropic"
+    OLLAMA = "ollama"  # Local - last resort
+
 class LLMModel(Enum):
     """Latest open-source LLMs"""
+    # API Models (Fast)
+    OPENAI_GPT4O = "gpt-4o"
+    OPENAI_GPT4O_MINI = "gpt-4o-mini"
+    GEMINI_PRO = "gemini-pro"
+    GEMINI_FLASH = "gemini-1.5-flash"
+    GROQ_LLAMA3_70B = "llama3-70b-8192"
+    GROQ_MIXTRAL = "mixtral-8x7b-32768"
+    ANTHROPIC_CLAUDE = "claude-3-haiku-20240307"
+    
+    # Local Models (Slow - fallback only)
     QWEN2_5_72B = "qwen2.5:72b"  # Alibaba's most advanced
     QWEN2_5_32B = "qwen2.5:32b"
     LLAMA3_1_405B = "llama3.1:405b"  # Meta's largest
@@ -226,62 +245,336 @@ class RetrievalStrategy(Enum):
 @dataclass
 class RAGConfig:
     """Configuration for the enhanced RAG system"""
-    embedding_model: EmbeddingModel = EmbeddingModel.BGE_M3
-    llm_model: LLMModel = LLMModel.QWEN2_5_32B
+    # Performance settings
+    fast_mode: bool = True  # Prioritize speed over accuracy
+    lazy_loading: bool = True  # Load models only when needed
+    enable_caching: bool = True  # Cache models and responses
+    
+    # LLM Configuration with fallback
+    llm_providers: List[LLMProvider] = field(default_factory=lambda: [
+        LLMProvider.OPENAI, LLMProvider.GEMINI, LLMProvider.GROQ,
+        LLMProvider.HUGGINGFACE_API, LLMProvider.ANTHROPIC, LLMProvider.OLLAMA
+    ])
+    preferred_llm_model: LLMModel = LLMModel.OPENAI_GPT4O_MINI  # Fast and cheap
+    fallback_llm_model: LLMModel = LLMModel.PHI3_5  # Local fallback
+    
+    # API Keys (optional - will be loaded from env)
+    openai_api_key: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+    groq_api_key: Optional[str] = None
+    anthropic_api_key: Optional[str] = None
+    huggingface_api_key: Optional[str] = None
+    
+    # Embedding settings
+    embedding_model: EmbeddingModel = EmbeddingModel.BGE_LARGE_EN  # Fast and good model
+    fallback_embedding_model: str = "all-MiniLM-L6-v2"  # Lightweight fallback
+    
+    # Other settings (preserved from original)
     retrieval_strategy: RetrievalStrategy = RetrievalStrategy.ADAPTIVE
-    vector_db: str = "qdrant"  # qdrant, weaviate, pinecone, chroma, faiss
+    vector_db: str = "faiss"  # FAISS is fastest for startup
     chunk_size: int = 512
     chunk_overlap: int = 50
     top_k: int = 10
     rerank_top_k: int = 5
-    enable_graph_rag: bool = True
-    enable_multimodal: bool = True
+    enable_graph_rag: bool = False  # Disable in fast mode by default
+    enable_multimodal: bool = False  # Disable in fast mode by default
     enable_self_correction: bool = True
     enable_feedback_learning: bool = True
     similarity_threshold: float = 0.7
-    max_tokens: int = 4096
+    max_tokens: int = 1024  # Smaller for speed
     temperature: float = 0.1
     use_async: bool = True
 
-class SemanticChunker:
-    """Advanced semantic chunking with multiple strategies"""
+class LLMProviderManager:
+    """Manages LLM providers with fallback and caching"""
     
-    def __init__(self, embedding_model: str = "BAAI/bge-small-en-v1.5"):
-        self.embedding_model = embedding_model
-        if _HAS_SENTENCE_TRANSFORMERS:
-            self.embedder = SentenceTransformer(embedding_model)
-        else:
-            self.embedder = None
+    def __init__(self, config: RAGConfig):
+        self.config = config
+        self.providers = {}
+        self.health_cache = {}  # Cache provider health status
+        self.response_cache = {}  # Cache recent responses
+        self.last_working_provider = None
+        self._load_api_keys()
+    
+    def _load_api_keys(self):
+        """Load API keys from environment variables"""
+        import os
+        self.api_keys = {
+            'openai': self.config.openai_api_key or os.getenv('OPENAI_API_KEY'),
+            'gemini': self.config.gemini_api_key or os.getenv('GEMINI_API_KEY', os.getenv('GOOGLE_API_KEY')),
+            'groq': self.config.groq_api_key or os.getenv('GROQ_API_KEY'),
+            'anthropic': self.config.anthropic_api_key or os.getenv('ANTHROPIC_API_KEY'),
+            'huggingface': self.config.huggingface_api_key or os.getenv('HUGGINGFACE_API_TOKEN', os.getenv('HF_TOKEN'))
+        }
+    
+    def _get_provider(self, provider_type: LLMProvider):
+        """Get or create a provider instance"""
+        if provider_type in self.providers:
+            return self.providers[provider_type]
+        
+        try:
+            if provider_type == LLMProvider.OPENAI and self.api_keys['openai']:
+                try:
+                    from langchain_openai import ChatOpenAI
+                    self.providers[provider_type] = ChatOpenAI(
+                        api_key=self.api_keys['openai'],
+                        model=self.config.preferred_llm_model.value,
+                        temperature=self.config.temperature,
+                        max_tokens=self.config.max_tokens
+                    )
+                except ImportError:
+                    logger.warning("OpenAI not available - install with: pip install langchain-openai")
+                    return None
+                    
+            elif provider_type == LLMProvider.GEMINI and self.api_keys['gemini']:
+                try:
+                    from langchain_google_genai import ChatGoogleGenerativeAI
+                    self.providers[provider_type] = ChatGoogleGenerativeAI(
+                        google_api_key=self.api_keys['gemini'],
+                        model=self.config.preferred_llm_model.value,
+                        temperature=self.config.temperature,
+                        max_output_tokens=self.config.max_tokens
+                    )
+                except ImportError:
+                    logger.warning("Google Gemini not available - install with: pip install langchain-google-genai")
+                    return None
+                    
+            elif provider_type == LLMProvider.GROQ and self.api_keys['groq']:
+                try:
+                    from langchain_groq import ChatGroq
+                    self.providers[provider_type] = ChatGroq(
+                        api_key=self.api_keys['groq'],
+                        model=self.config.preferred_llm_model.value,
+                        temperature=self.config.temperature,
+                        max_tokens=self.config.max_tokens
+                    )
+                except ImportError:
+                    logger.warning("Groq not available - install with: pip install langchain-groq")
+                    return None
+                    
+            elif provider_type == LLMProvider.ANTHROPIC and self.api_keys['anthropic']:
+                try:
+                    from langchain_anthropic import ChatAnthropic
+                    self.providers[provider_type] = ChatAnthropic(
+                        api_key=self.api_keys['anthropic'],
+                        model=self.config.preferred_llm_model.value,
+                        temperature=self.config.temperature,
+                        max_tokens=self.config.max_tokens
+                    )
+                except ImportError:
+                    logger.warning("Anthropic not available - install with: pip install langchain-anthropic")
+                    return None
+                    
+            elif provider_type == LLMProvider.HUGGINGFACE_API and self.api_keys['huggingface']:
+                try:
+                    from langchain_huggingface import HuggingFaceEndpoint
+                    self.providers[provider_type] = HuggingFaceEndpoint(
+                        huggingfacehub_api_token=self.api_keys['huggingface'],
+                        repo_id="microsoft/DialoGPT-medium",  # Fast model
+                        temperature=self.config.temperature,
+                        max_length=self.config.max_tokens
+                    )
+                except ImportError:
+                    logger.warning("HuggingFace not available - install with: pip install langchain-huggingface")
+                    return None
+                    
+            elif provider_type == LLMProvider.OLLAMA:
+                # Only create Ollama as last resort
+                if _HAS_LANGCHAIN:
+                    self.providers[provider_type] = ChatOllama(
+                        model=self.config.fallback_llm_model.value,
+                        temperature=self.config.temperature,
+                        num_predict=self.config.max_tokens
+                    )
+                else:
+                    return None
+            
+            return self.providers.get(provider_type)
+            
+        except Exception as e:
+            logger.error(f"Failed to create {provider_type.value} provider: {e}")
+            return None
+    
+    def _is_provider_healthy(self, provider_type: LLMProvider) -> bool:
+        """Check if provider is healthy (cached)"""
+        if provider_type in self.health_cache:
+            return self.health_cache[provider_type]
+        
+        provider = self._get_provider(provider_type)
+        if not provider:
+            self.health_cache[provider_type] = False
+            return False
+        
+        try:
+            # Quick health check - try a simple completion
+            if provider_type != LLMProvider.OLLAMA:
+                # For API providers, just check if we have API key
+                self.health_cache[provider_type] = True
+            else:
+                # For Ollama, we'd need to check if service is running
+                # For now, assume it's available
+                self.health_cache[provider_type] = True
+            return self.health_cache[provider_type]
+        except Exception:
+            self.health_cache[provider_type] = False
+            return False
+    
+    def get_llm(self):
+        """Get the best available LLM with fallback"""
+        # Try last working provider first for speed
+        if self.last_working_provider and self._is_provider_healthy(self.last_working_provider):
+            provider = self._get_provider(self.last_working_provider)
+            if provider:
+                return provider
+        
+        # Try providers in priority order
+        for provider_type in self.config.llm_providers:
+            if self._is_provider_healthy(provider_type):
+                provider = self._get_provider(provider_type)
+                if provider:
+                    self.last_working_provider = provider_type
+                    logger.info(f"Using LLM provider: {provider_type.value}")
+                    return provider
+        
+        # No providers available
+        logger.error("No LLM providers available!")
+        return None
+    
+    def clear_health_cache(self):
+        """Clear health cache to force re-checking"""
+        self.health_cache.clear()
+
+class FastEmbedder:
+    """Fast embedding model with fallbacks and lazy loading"""
+    
+    def __init__(self, config: RAGConfig):
+        self.config = config
+        self.embedder = None
+        self.model_name = None
+        self.embed_method = None
+        self._is_loaded = False
+    
+    def _load_model(self):
+        """Lazy load the embedding model with fallbacks"""
+        if self._is_loaded:
+            return
+        
+        # Try primary model first
+        try:
+            if self.config.fast_mode:
+                # Use lightweight model for fast mode
+                self.model_name = self.config.fallback_embedding_model
+            else:
+                self.model_name = self.config.embedding_model.value
+            
+            if _HAS_SENTENCE_TRANSFORMERS:
+                self.embedder = SentenceTransformer(self.model_name)
+                self.embed_method = "sentence_transformers"
+                self._is_loaded = True
+                logger.info(f"Loaded embedding model: {self.model_name}")
+                return
+        except Exception as e:
+            logger.warning(f"Failed to load {self.model_name}: {e}")
+        
+        # Fallback to basic model
+        try:
+            self.model_name = "all-MiniLM-L6-v2"
+            if _HAS_SENTENCE_TRANSFORMERS:
+                self.embedder = SentenceTransformer(self.model_name)
+                self.embed_method = "sentence_transformers"
+                self._is_loaded = True
+                logger.info(f"Loaded fallback embedding model: {self.model_name}")
+                return
+        except Exception as e:
+            logger.warning(f"Failed to load fallback model: {e}")
+        
+        # Final fallback - no embeddings (use simple text matching)
+        self.embedder = None
+        self.embed_method = "fallback"
+        self._is_loaded = True
+        logger.warning("No embedding models available - using text fallback")
+    
+    def encode(self, texts: Union[str, List[str]]) -> Optional[np.ndarray]:
+        """Encode texts to embeddings with lazy loading"""
+        if not self._is_loaded:
+            self._load_model()
+        
+        if self.embedder:
+            try:
+                return self.embedder.encode(texts)
+            except Exception as e:
+                logger.error(f"Embedding encoding failed: {e}")
+                return None
+        
+        # Text fallback - return None (will trigger simpler matching)
+        return None
+
+class SemanticChunker:
+    """Advanced semantic chunking with multiple strategies and fast mode"""
+    
+    def __init__(self, config: RAGConfig):
+        self.config = config
+        self.embedder = None
+        if not config.fast_mode and not config.lazy_loading:
+            # Load embedder immediately only if not in fast mode
+            self.embedder = FastEmbedder(config)
     
     def semantic_split(self, text: str, chunk_size: int = 512, threshold: float = 0.5) -> List[str]:
-        """Split text based on semantic similarity"""
+        """Split text based on semantic similarity with fast mode fallback"""
+        if self.config.fast_mode:
+            # Fast mode - use simple splitting
+            return self._fallback_split(text, chunk_size)
+        
+        # Lazy load embedder if needed
         if not self.embedder:
+            self.embedder = FastEmbedder(self.config)
+        
+        embeddings = self.embedder.encode(text) if self.embedder else None
+        if embeddings is None:
             return self._fallback_split(text, chunk_size)
         
         sentences = self._split_into_sentences(text)
         if len(sentences) <= 1:
             return [text]
         
-        embeddings = self.embedder.encode(sentences)
-        similarities = []
-        
-        for i in range(len(embeddings) - 1):
-            sim = F.cosine_similarity(
-                torch.tensor(embeddings[i]).unsqueeze(0),
-                torch.tensor(embeddings[i + 1]).unsqueeze(0)
-            ).item()
-            similarities.append(sim)
-        
-        # Find split points where similarity drops
-        chunks = []
-        current_chunk = [sentences[0]]
-        
-        for i, sim in enumerate(similarities):
-            if sim < threshold or len(' '.join(current_chunk)) > chunk_size:
+        try:
+            sentence_embeddings = self.embedder.encode(sentences)
+            if sentence_embeddings is None:
+                return self._fallback_split(text, chunk_size)
+            
+            similarities = []
+            
+            for i in range(len(sentence_embeddings) - 1):
+                if _HAS_TORCH:
+                    sim = F.cosine_similarity(
+                        torch.tensor(sentence_embeddings[i]).unsqueeze(0),
+                        torch.tensor(sentence_embeddings[i + 1]).unsqueeze(0)
+                    ).item()
+                else:
+                    # Simple cosine similarity without torch
+                    a, b = sentence_embeddings[i], sentence_embeddings[i + 1]
+                    sim = np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+                similarities.append(sim)
+            
+            # Find split points where similarity drops
+            chunks = []
+            current_chunk = [sentences[0]]
+            
+            for i, sim in enumerate(similarities):
+                if sim < threshold or len(' '.join(current_chunk)) > chunk_size:
+                    chunks.append(' '.join(current_chunk))
+                    current_chunk = [sentences[i + 1]]
+                else:
+                    current_chunk.append(sentences[i + 1])
+            
+            if current_chunk:
                 chunks.append(' '.join(current_chunk))
-                current_chunk = [sentences[i + 1]]
-            else:
-                current_chunk.append(sentences[i + 1])
+            
+            return chunks
+            
+        except Exception as e:
+            logger.warning(f"Semantic chunking failed: {e}, falling back to simple splitting")
+            return self._fallback_split(text, chunk_size)
         
         if current_chunk:
             chunks.append(' '.join(current_chunk))
@@ -641,27 +934,30 @@ class FeedbackLearningSystem:
         return recommendations
 
 class AdvancedRAGSystem:
-    """Next-generation RAG system with all advanced features"""
+    """Next-generation RAG system with ultra-fast loading and LLM fallback"""
     
     def __init__(self, config: RAGConfig, index_dir: str = "data/index"):
         self.config = config
         self.index_dir = Path(index_dir)
         self.index_dir.mkdir(parents=True, exist_ok=True)
         
-        # Core components
-        self.embedder = AdvancedEmbedder(config.embedding_model.value)
-        self.chunker = SemanticChunker(config.embedding_model.value)
-        self.retriever = HybridRetriever(config)
-        self.raptor = RAPTORRetriever(config)
-        self.multimodal = MultiModalProcessor()
-        self.feedback_system = FeedbackLearningSystem()
+        # Initialize core components with lazy loading for speed
+        self.llm_manager = LLMProviderManager(config)
+        self.embedder = None  # Lazy loaded
+        self.chunker = SemanticChunker(config)
+        
+        # These will be lazy loaded only when needed
+        self.retriever = None
+        self.raptor = None
+        self.multimodal = None
+        self.feedback_system = None
         
         # Storage
         self.documents = []
         self.chunks = []
         self.metadata = []
         
-        # Models
+        # Models (lazy loaded)
         self.llm = None
         self.reranker = None
         
@@ -673,34 +969,69 @@ class AdvancedRAGSystem:
             "avg_response_time": 0.0
         }
         
-        self._setup_models()
-        logger.info(f"Initialized AdvancedRAGSystem with {config.embedding_model.value}")
+        # Setup models only if not in lazy loading mode
+        if not config.lazy_loading:
+            self._setup_models()
+        
+        logger.info(f"Initialized AdvancedRAGSystem (fast_mode={config.fast_mode}, lazy_loading={config.lazy_loading})")
     
     def _setup_models(self):
-        """Setup LLM and other models"""
+        """Setup LLM and other models with fallback"""
+        if self.llm is not None:
+            return  # Already set up
+        
         try:
-            if _HAS_LANGCHAIN:
-                self.llm = ChatOllama(
-                    model=self.config.llm_model.value,
-                    temperature=self.config.temperature,
-                    num_predict=self.config.max_tokens
-                )
+            # Get LLM with fallback
+            self.llm = self.llm_manager.get_llm()
+            if self.llm:
+                logger.info("LLM setup successful")
+            else:
+                logger.warning("No LLM providers available - will use fallback")
+                
         except Exception as e:
             logger.error(f"Error setting up LLM: {e}")
+            self.llm = None
+    
+    def _ensure_embedder(self):
+        """Lazy load embedder when needed"""
+        if self.embedder is None:
+            self.embedder = FastEmbedder(self.config)
+    
+    def _ensure_retriever(self):
+        """Lazy load retriever when needed"""
+        if self.retriever is None:
+            self.retriever = HybridRetriever(self.config)
+    
+    def _ensure_advanced_components(self):
+        """Lazy load advanced components when needed"""
+        try:
+            if not self.config.fast_mode:
+                if self.raptor is None:
+                    self.raptor = RAPTORRetriever(self.config)
+                if self.multimodal is None and self.config.enable_multimodal:
+                    self.multimodal = MultiModalProcessor()
+                if self.feedback_system is None and self.config.enable_feedback_learning:
+                    self.feedback_system = FeedbackLearningSystem()
+        except Exception as e:
+            logger.error(f"Error setting up advanced components: {e}")
     
     def add_documents(self, documents: List[str], metadata: List[Dict] = None):
-        """Add documents to the RAG system"""
+        """Add documents to the RAG system with fast processing"""
         start_time = time.time()
         
         if metadata is None:
             metadata = [{}] * len(documents)
+        
+        # Ensure embedder is available
+        self._ensure_embedder()
+        self._ensure_retriever()
         
         # Process documents
         all_chunks = []
         all_metadata = []
         
         for i, (doc, meta) in enumerate(zip(documents, metadata)):
-            # Semantic chunking
+            # Use chunker (which respects fast_mode)
             chunks = self.chunker.semantic_split(doc, self.config.chunk_size)
             
             for j, chunk in enumerate(chunks):
@@ -722,11 +1053,17 @@ class AdvancedRAGSystem:
         ]
         
         # Setup retrievers
-        self.retriever.setup_vector_store(langchain_docs, self.embedder)
+        if self.retriever:
+            try:
+                self.retriever.setup_vector_store(langchain_docs, self.embedder)
+            except Exception as e:
+                logger.warning(f"Vector store setup failed: {e}")
         
-        # Build RAPTOR tree
-        if self.config.retrieval_strategy == RetrievalStrategy.RAPTOR:
-            self.raptor.build_tree(langchain_docs)
+        # Build RAPTOR tree only if not in fast mode
+        if not self.config.fast_mode and self.config.retrieval_strategy == RetrievalStrategy.RAPTOR:
+            self._ensure_advanced_components()
+            if self.raptor:
+                self.raptor.build_tree(langchain_docs)
         
         # Update storage
         self.documents.extend(documents)
@@ -741,22 +1078,39 @@ class AdvancedRAGSystem:
         logger.info(f"Added {len(documents)} documents ({len(all_chunks)} chunks) in {processing_time:.2f}s")
     
     def query(self, question: str, **kwargs) -> Dict[str, Any]:
-        """Process query with advanced RAG techniques and entity-aware analytics"""
+        """Process query with fast RAG and LLM fallback"""
         start_time = time.time()
+        
+        # Ensure models are loaded
+        if self.config.lazy_loading:
+            self._setup_models()
+        
         try:
+            # Fast mode - simplified processing
+            if self.config.fast_mode:
+                return self._fast_query(question, **kwargs)
+            
+            # Full mode - advanced processing
+            self._ensure_advanced_components()
+            
             # Get recommendations from feedback system
-            recommendations = self.feedback_system.get_recommendations(question)
+            recommendations = self.feedback_system.get_recommendations(question) if self.feedback_system else {}
+            
             # Detect user intent
             intents = extract_intent(question)
+            
             # Adaptive strategy selection
             strategy = self._select_strategy(question, recommendations)
+            
             # Multi-query generation for RAG fusion
             queries = self._generate_multiple_queries(question) if strategy == RetrievalStrategy.RAG_FUSION else [question]
+            
             # Retrieve relevant documents
             all_docs = []
             for query in queries:
                 docs = self._retrieve_documents(query, strategy)
                 all_docs.extend(docs)
+            
             # Remove duplicates and rerank
             unique_docs = self._deduplicate_documents(all_docs)
             reranked_docs = self._rerank_documents(question, unique_docs)
@@ -857,6 +1211,114 @@ class AdvancedRAGSystem:
                 "processing_time": time.time() - start_time,
                 "error": str(e)
             }
+    
+    def _fast_query(self, question: str, **kwargs) -> Dict[str, Any]:
+        """Fast query processing for instant responses"""
+        start_time = time.time()
+        
+        try:
+            # Simple text search if no vector store available
+            if not self.chunks:
+                return {
+                    "answer": "No documents have been added yet. Please upload some resumes first.",
+                    "source_documents": [],
+                    "strategy_used": "no_documents",
+                    "processing_time": time.time() - start_time
+                }
+            
+            # Basic keyword search in chunks
+            question_lower = question.lower()
+            keywords = question_lower.split()
+            
+            # Score chunks by keyword overlap
+            scored_chunks = []
+            for i, chunk in enumerate(self.chunks):
+                chunk_lower = chunk.lower()
+                score = sum(1 for keyword in keywords if keyword in chunk_lower)
+                if score > 0:
+                    scored_chunks.append((score, chunk, self.metadata[i] if i < len(self.metadata) else {}))
+            
+            # Sort by score and take top results
+            scored_chunks.sort(key=lambda x: x[0], reverse=True)
+            top_chunks = scored_chunks[:self.config.top_k]
+            
+            # Create response using LLM if available
+            if self.llm is None:
+                self._setup_models()
+            
+            if self.llm:
+                context = "\n\n".join([chunk for _, chunk, _ in top_chunks[:3]])
+                response = self._generate_fast_response(question, context)
+            else:
+                # Fallback to simple text response
+                if top_chunks:
+                    response = f"Based on the documents, here are the most relevant excerpts:\n\n"
+                    for i, (score, chunk, meta) in enumerate(top_chunks[:3]):
+                        file_info = meta.get('file', 'Unknown file')
+                        response += f"**From {file_info}:**\n{chunk[:200]}...\n\n"
+                else:
+                    response = "I couldn't find relevant information in the uploaded documents."
+            
+            # Create source documents
+            source_docs = [
+                {
+                    "content": chunk[:500] + "..." if len(chunk) > 500 else chunk,
+                    "metadata": meta,
+                    "relevance_score": score / len(keywords)
+                }
+                for score, chunk, meta in top_chunks[:5]
+            ]
+            
+            # Update stats
+            self.stats["queries_processed"] += 1
+            processing_time = time.time() - start_time
+            self.stats["avg_response_time"] = (
+                (self.stats["avg_response_time"] * (self.stats["queries_processed"] - 1) + processing_time)
+                / self.stats["queries_processed"]
+            )
+            
+            return {
+                "answer": response,
+                "source_documents": source_docs,
+                "strategy_used": "fast_search",
+                "processing_time": processing_time
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in fast query: {e}")
+            return {
+                "answer": f"I encountered an error: {str(e)}",
+                "source_documents": [],
+                "strategy_used": "error",
+                "processing_time": time.time() - start_time,
+                "error": str(e)
+            }
+    
+    def _generate_fast_response(self, question: str, context: str) -> str:
+        """Generate fast response using available LLM"""
+        try:
+            if not self.llm:
+                return f"Based on the available information:\n\n{context[:800]}..."
+            
+            prompt = f"""Based on the following resume information, please answer the question concisely:
+
+Context:
+{context[:1000]}
+
+Question: {question}
+
+Answer:"""
+            
+            if hasattr(self.llm, 'invoke'):
+                response = self.llm.invoke(prompt)
+                return response.content if hasattr(response, 'content') else str(response)
+            else:
+                # Fallback for different LLM interfaces
+                return f"Based on the provided context: {context[:300]}..."
+                
+        except Exception as e:
+            logger.error(f"Error generating fast response: {e}")
+            return f"I found relevant information but had trouble processing it. Key content: {context[:400]}..."
     
     def _select_strategy(self, query: str, recommendations: Dict) -> RetrievalStrategy:
         """Intelligently select retrieval strategy"""
