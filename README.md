@@ -553,11 +553,6 @@ ENABLE_OLLAMA=true
 
 MIT License - see LICENSE file for details.
 
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/your-username/Resume-Analysis-Agent/issues)
-- **Documentation**: [Project Wiki](https://github.com/your-username/Resume-Analysis-Agent/wiki)
-
 ---
 
 *Last modified: 21-09-2025*
