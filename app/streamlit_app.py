@@ -13,7 +13,7 @@ from parsing import extract_docs_to_chunks_and_records
 from fast_semantic_rag import create_fast_semantic_rag
 
 load_dotenv()
-st.set_page_config(page_title="RAG - Resume", layout="wide")
+st.set_page_config(page_title="Resume Analysis Agent", layout="wide")
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -29,7 +29,7 @@ if "manifest" not in st.session_state:
 if "history" not in st.session_state:
     st.session_state.history = []
 
-st.title("Resume Analysis Agent — RAG")
+st.title("Resume Analysis Agent")
 
 # ---- Sidebar (upload only PDFs & DOC/DOCX) ----
 with st.sidebar:

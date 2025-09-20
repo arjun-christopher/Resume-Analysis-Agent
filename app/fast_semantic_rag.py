@@ -807,47 +807,109 @@ class FastSemanticRAG:
             }
     
     def _extract_pattern_insights(self, question: str, search_results: List[Tuple[str, Dict, float]]) -> str:
-        """Extract pattern-based insights from search results"""
+        """Enhanced pattern-based insights with comprehensive entity extraction"""
         question_lower = question.lower()
         insights = []
         
-        # Aggregate patterns from search results
-        all_emails = set()
-        all_skills = set()
-        all_linkedin = set()
-        all_github = set()
-        all_experience = []
+        # Aggregate patterns from search results with enhanced categories
+        aggregated_data = {
+            'names': set(),
+            'emails': set(),
+            'skills': set(),
+            'technical_skills': set(),
+            'professional_skills': set(),
+            'project_skills': set(),
+            'linkedin': set(),
+            'github': set(),
+            'portfolio': set(),
+            'social_links': set(),
+            'organizations': set(),
+            'locations': set(),
+            'certifications': set(),
+            'education': set(),
+            'experience_years': [],
+            'phones': set()
+        }
         
+        # Enhanced aggregation with context-aware skill categorization
         for _, metadata, _ in search_results:
-            all_emails.update(metadata.get('emails', []))
-            all_skills.update(metadata.get('skills', []))
-            all_linkedin.update(metadata.get('linkedin', []))
-            all_github.update(metadata.get('github', []))
-            all_experience.extend(metadata.get('experience_years', []))
+            for key in aggregated_data:
+                if key in metadata:
+                    if key == 'experience_years':
+                        aggregated_data[key].extend(metadata[key])
+                    else:
+                        aggregated_data[key].update(metadata.get(key, []))
+            
+            # Separate skills by context if available
+            skills = metadata.get('skills', [])
+            for skill in skills:
+                if '(' in skill and ')' in skill:
+                    # Contextual skill like "python (technical_skills)"
+                    base_skill = skill.split('(')[0].strip()
+                    context = skill.split('(')[1].split(')')[0].strip()
+                    aggregated_data['skills'].add(base_skill)
+                    if context in aggregated_data:
+                        aggregated_data[context].add(base_skill)
+                else:
+                    aggregated_data['skills'].add(skill)
         
-        # Generate insights based on question patterns
+        # Generate enhanced insights based on question patterns
+        if any(word in question_lower for word in ['name', 'candidate', 'person', 'who']):
+            if aggregated_data['names']:
+                insights.append(f"**👤 Candidate Names:**\n" + '\n'.join(f"• {name}" for name in sorted(aggregated_data['names'])))
+        
         if any(word in question_lower for word in ['email', 'contact', 'reach']):
-            if all_emails:
-                insights.append(f"**📧 Email Addresses Found:**\n" + '\n'.join(f"• {email}" for email in sorted(all_emails)))
+            if aggregated_data['emails']:
+                insights.append(f"**📧 Email Addresses:**\n" + '\n'.join(f"• {email}" for email in sorted(aggregated_data['emails'])))
+        
+        if any(word in question_lower for word in ['phone', 'mobile', 'number']):
+            if aggregated_data['phones']:
+                insights.append(f"**📱 Phone Numbers:**\n" + '\n'.join(f"• {phone}" for phone in sorted(aggregated_data['phones'])))
         
         if any(word in question_lower for word in ['skill', 'technology', 'tech', 'programming']):
-            if all_skills:
-                skill_counts = Counter([skill.lower() for skill in all_skills])
-                insights.append(f"**💻 Technical Skills:**\n" + '\n'.join(f"• {skill}" for skill in list(skill_counts.keys())[:10]))
+            # Provide context-aware skill insights
+            if aggregated_data['technical_skills']:
+                insights.append(f"**💻 Technical Skills:**\n" + '\n'.join(f"• {skill}" for skill in sorted(aggregated_data['technical_skills'])[:10]))
+            elif aggregated_data['skills']:
+                skill_counts = Counter([skill.lower() for skill in aggregated_data['skills']])
+                insights.append(f"**🛠️ All Skills:**\n" + '\n'.join(f"• {skill}" for skill in list(skill_counts.keys())[:10]))
         
-        if any(word in question_lower for word in ['linkedin', 'profile', 'social']):
-            if all_linkedin:
-                insights.append(f"**🔗 LinkedIn Profiles:**\n" + '\n'.join(f"• {profile}" for profile in sorted(all_linkedin)))
+        if any(word in question_lower for word in ['linkedin', 'social', 'profile']):
+            if aggregated_data['linkedin']:
+                insights.append(f"**🔗 LinkedIn Profiles:**\n" + '\n'.join(f"• {link}" for link in sorted(aggregated_data['linkedin'])))
         
-        if any(word in question_lower for word in ['github', 'code', 'repository']):
-            if all_github:
-                insights.append(f"**🐙 GitHub Profiles:**\n" + '\n'.join(f"• {profile}" for profile in sorted(all_github)))
+        if any(word in question_lower for word in ['github', 'code', 'repository', 'repo']):
+            if aggregated_data['github']:
+                insights.append(f"**💻 GitHub Profiles:**\n" + '\n'.join(f"• {link}" for link in sorted(aggregated_data['github'])))
         
-        if any(word in question_lower for word in ['experience', 'years', 'senior']):
-            if all_experience:
-                avg_exp = sum(all_experience) / len(all_experience)
-                max_exp = max(all_experience)
-                insights.append(f"**📈 Experience Analysis:**\n• Average: {avg_exp:.1f} years\n• Maximum: {max_exp} years\n• Experience range: {min(all_experience)}-{max_exp} years")
+        if any(word in question_lower for word in ['portfolio', 'website', 'personal']):
+            if aggregated_data['portfolio']:
+                insights.append(f"**🌐 Portfolio/Websites:**\n" + '\n'.join(f"• {link}" for link in sorted(aggregated_data['portfolio'])))
+        
+        if any(word in question_lower for word in ['company', 'organization', 'employer', 'work']):
+            if aggregated_data['organizations']:
+                org_counts = Counter(aggregated_data['organizations'])
+                insights.append(f"**🏢 Organizations:**\n" + '\n'.join(f"• {org}" for org in list(org_counts.keys())[:10]))
+        
+        if any(word in question_lower for word in ['location', 'city', 'country', 'address']):
+            if aggregated_data['locations']:
+                insights.append(f"**📍 Locations:**\n" + '\n'.join(f"• {loc}" for loc in sorted(aggregated_data['locations'])))
+        
+        if any(word in question_lower for word in ['certification', 'certificate', 'certified']):
+            if aggregated_data['certifications']:
+                insights.append(f"**🏆 Certifications:**\n" + '\n'.join(f"• {cert}" for cert in sorted(aggregated_data['certifications'])))
+        
+        if any(word in question_lower for word in ['education', 'degree', 'university', 'college']):
+            if aggregated_data['education']:
+                insights.append(f"**🎓 Education:**\n" + '\n'.join(f"• {edu}" for edu in sorted(aggregated_data['education'])))
+        
+        if any(word in question_lower for word in ['experience', 'years', 'exp']):
+            if aggregated_data['experience_years']:
+                exp_years = [int(x) for x in aggregated_data['experience_years'] if isinstance(x, (int, str)) and str(x).isdigit()]
+                if exp_years:
+                    avg_exp = sum(exp_years) / len(exp_years)
+                    max_exp = max(exp_years)
+                    insights.append(f"**📈 Experience Analysis:**\n• Average: {avg_exp:.1f} years\n• Maximum: {max_exp} years\n• Experience range: {min(exp_years)}-{max_exp} years")
         
         if any(word in question_lower for word in ['eda', 'analysis', 'overview', 'summary']):
             # Generate EDA summary
