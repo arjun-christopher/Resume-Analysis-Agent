@@ -140,6 +140,8 @@ class FastSemanticChunker:
     def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5"):
         self.model_name = model_name
         self.embedder = None
+        self.embed_method = None
+        self.is_fitted = False  # Track if TF-IDF is fitted
         self._init_embedder()
     
     def _init_embedder(self):
@@ -215,9 +217,10 @@ class FastSemanticChunker:
             
             elif self.embed_method == "tfidf":
                 # For TF-IDF, we need to fit_transform or transform
-                if not hasattr(self.embedder, 'vocabulary_'):
+                if not self.is_fitted:
                     # First time - fit and transform
                     embeddings = self.embedder.fit_transform(texts)
+                    self.is_fitted = True
                 else:
                     # Already fitted - just transform
                     embeddings = self.embedder.transform(texts)
@@ -454,23 +457,32 @@ class FastVectorStore:
         self.index = None
         self.documents = []
         self.metadata = []
-        self._init_index()
+        self._index_initialized = False
     
-    def _init_index(self):
+    def _init_index(self, actual_dimension: int = None):
         """Initialize FAISS index for speed"""
+        if actual_dimension:
+            self.dimension = actual_dimension
+            
         if _HAS_FAISS:
             # Use IndexFlatIP for fastest search (inner product)
             self.index = faiss.IndexFlatIP(self.dimension)
+            self._index_initialized = True
             logger.info(f"Initialized FAISS index with dimension {self.dimension}")
         else:
             logger.warning("FAISS not available - falling back to linear search")
     
     def add_documents(self, texts: List[str], embeddings: np.ndarray, metadata: List[Dict]):
         """Add documents to vector store"""
-        if self.index is not None:
-            # Normalize embeddings for cosine similarity via inner product
-            faiss.normalize_L2(embeddings)
-            self.index.add(embeddings)
+        if embeddings.size > 0:
+            # Initialize index with actual embedding dimension
+            if not self._index_initialized and embeddings.shape[1] != self.dimension:
+                self._init_index(embeddings.shape[1])
+            
+            if self.index is not None:
+                # Normalize embeddings for cosine similarity via inner product
+                faiss.normalize_L2(embeddings)
+                self.index.add(embeddings)
         
         self.documents.extend(texts)
         self.metadata.extend(metadata)
