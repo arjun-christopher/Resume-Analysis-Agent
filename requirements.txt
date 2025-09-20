@@ -1,3 +1,4 @@
+# Core web framework
 streamlit
 pandas
 numpy
@@ -6,12 +7,19 @@ numpy
 pdfplumber
 python-docx
 Pillow
+pypdf
+pdf2image
 
 # Advanced RAG frameworks
 langchain
 langchain-community
 langchain-core
 langchain-text-splitters
+langchain-openai
+langchain-google-genai
+langchain-groq
+langchain-huggingface
+langchain-anthropic
 lightrag
 llama-index
 llama-index-core
@@ -24,24 +32,28 @@ ragas
 # Vector databases and retrieval
 chromadb
 qdrant-client
-weaviate
-pinecone
+weaviate-client
+pinecone-client
+faiss-cpu
 
 # NLP and ML
 sentence-transformers
 transformers
 torch
-faiss-cpu
 spacy
 nltk
 
-# Open-source models
+# Advanced embedding models
+instructor
+fastembed
+
+# Open-source model integrations
 ollama
 huggingface-hub
 accelerate
 bitsandbytes
 
-# Advanced NLP
+# Advanced NLP and text processing
 textstat
 dateparser
 phonenumbers
@@ -51,20 +63,10 @@ sentence-splitter
 # Advanced resume parsing
 pyresparser
 layoutparser
-pypdf
-
-# For spaCy transformer model, run after install:
-# python -m spacy download en_core_web_trf
-# python -m spacy download en_core_web_sm
-# For transformers NER model, use: dbmdz/bert-large-cased-finetuned-conll03-english
-
-# Embedding models
-instructor
-fastembed
 
 # Advanced ML frameworks for RAG
-dspy
-haystack
+dspy-ai
+haystack-ai
 
 # Graph database
 neo4j
@@ -77,10 +79,11 @@ easyocr
 pytesseract
 opencv-python
 
-# API integrations (optional)
+# API integrations
 openai
 anthropic
 google-generativeai
+groq
 
 # Utilities
 python-dotenv
@@ -93,8 +96,8 @@ wordcloud
 # Advanced NER & Information Extraction
 spacy-transformers
 
-# Advanced Resume Parsing Libraries
-pyresparser
-layoutparser
-pdf2image
-transformers[torch]
+# For spaCy transformer models, run after install:
+# python -m spacy download en_core_web_trf
+# python -m spacy download en_core_web_sm
+
+# For transformers NER model, use: dbmdz/bert-large-cased-finetuned-conll03-english

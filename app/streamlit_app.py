@@ -153,9 +153,21 @@ if prompt:
                 with st.expander("Source Documents", expanded=False):
                     for i, doc in enumerate(source_docs[:5]):
                         st.markdown(f"**Document {i+1}:**")
-                        st.text(doc.page_content[:500] + "..." if len(doc.page_content) > 500 else doc.page_content)
-                        if hasattr(doc, 'metadata') and doc.metadata:
-                            st.json(doc.metadata)
+                        # Handle both dict and object formats
+                        if isinstance(doc, dict):
+                            content = doc.get('content', '')
+                            metadata = doc.get('metadata', {})
+                            relevance_score = doc.get('relevance_score', 0.0)
+                        else:
+                            content = getattr(doc, 'page_content', '')
+                            metadata = getattr(doc, 'metadata', {})
+                            relevance_score = getattr(doc, 'relevance_score', 0.0)
+                        
+                        st.text(content[:500] + "..." if len(content) > 500 else content)
+                        if metadata:
+                            st.json(metadata)
+                        if relevance_score > 0:
+                            st.caption(f"Relevance Score: {relevance_score:.3f}")
                         st.markdown("---")
             
             # Show system stats

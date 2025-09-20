@@ -11,6 +11,7 @@ Enhanced RAG Engine with cutting-edge open-source models and techniques:
 
 from __future__ import annotations
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -88,6 +89,37 @@ try:
     _HAS_LANGCHAIN = True
 except ImportError:
     _HAS_LANGCHAIN = False
+
+# OpenAI, Gemini, and other API imports
+try:
+    from langchain_openai import ChatOpenAI
+    _HAS_OPENAI = True
+except ImportError:
+    _HAS_OPENAI = False
+
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    _HAS_GEMINI = True
+except ImportError:
+    _HAS_GEMINI = False
+
+try:
+    from langchain_groq import ChatGroq
+    _HAS_GROQ = True
+except ImportError:
+    _HAS_GROQ = False
+
+try:
+    from langchain_huggingface import HuggingFaceEndpoint
+    _HAS_HUGGINGFACE_ENDPOINT = True
+except ImportError:
+    _HAS_HUGGINGFACE_ENDPOINT = False
+
+try:
+    from langchain_anthropic import ChatAnthropic
+    _HAS_ANTHROPIC = True
+except ImportError:
+    _HAS_ANTHROPIC = False
 
 # LlamaIndex integration
 try:
@@ -184,6 +216,9 @@ logger = logging.getLogger(__name__)
 # Suppress warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
+# Suppress specific transformers warnings for BERT NER models
+warnings.filterwarnings("ignore", message="Some weights of the model checkpoint.*were not used when initializing.*")
+warnings.filterwarnings("ignore", message=".*This IS expected if you are initializing.*")
 
 class EmbeddingModel(Enum):
     """Latest and most powerful embedding models"""
@@ -227,7 +262,7 @@ class RetrievalStrategy(Enum):
 class RAGConfig:
     """Configuration for the enhanced RAG system"""
     embedding_model: EmbeddingModel = EmbeddingModel.BGE_M3
-    llm_model: LLMModel = LLMModel.QWEN2_5_32B
+    llm_model: str = "llama2:7b"  # Changed to string to support user's model choice
     retrieval_strategy: RetrievalStrategy = RetrievalStrategy.ADAPTIVE
     vector_db: str = "qdrant"  # qdrant, weaviate, pinecone, chroma, faiss
     chunk_size: int = 512
@@ -243,18 +278,134 @@ class RAGConfig:
     temperature: float = 0.1
     use_async: bool = True
 
+class LLMProvider:
+    """Handles LLM API calls with prioritized fallback"""
+    
+    def __init__(self):
+        self.providers = []
+        self.current_provider = None
+        self.provider_cache = {}
+        self._setup_providers()
+    
+    def _setup_providers(self):
+        """Setup LLM providers in priority order"""
+        # OpenAI (highest priority)
+        if os.getenv("OPENAI_API_KEY") and _HAS_OPENAI:
+            try:
+                self.providers.append(("openai", lambda: ChatOpenAI(
+                    temperature=0.1,
+                    max_tokens=1024,
+                    model_name="gpt-3.5-turbo"
+                )))
+            except Exception as e:
+                logger.warning(f"OpenAI initialization error: {e}")
+        
+        # Google Gemini (second priority)
+        if os.getenv("GEMINI_API_KEY") and _HAS_GEMINI:
+            try:
+                self.providers.append(("gemini", lambda: ChatGoogleGenerativeAI(
+                    temperature=0.1,
+                    model="gemini-pro",
+                    convert_system_message_to_human=True
+                )))
+            except Exception as e:
+                logger.warning(f"Gemini initialization error: {e}")
+        
+        # Groq (third priority)
+        if os.getenv("GROQ_API_KEY") and _HAS_GROQ:
+            try:
+                self.providers.append(("groq", lambda: ChatGroq(
+                    temperature=0.1,
+                    model_name="llama2-70b-4096"
+                )))
+            except Exception as e:
+                logger.warning(f"Groq initialization error: {e}")
+        
+        # HuggingFace (fourth priority)
+        if os.getenv("HUGGINGFACE_API_KEY") and _HAS_HUGGINGFACE_ENDPOINT:
+            try:
+                self.providers.append(("huggingface", lambda: HuggingFaceEndpoint(
+                    repo_id="mistralai/Mistral-7B-Instruct-v0.2",
+                    max_length=1024,
+                    temperature=0.1
+                )))
+            except Exception as e:
+                logger.warning(f"HuggingFace initialization error: {e}")
+        
+        # Anthropic (fifth priority)
+        if os.getenv("ANTHROPIC_API_KEY") and _HAS_ANTHROPIC:
+            try:
+                self.providers.append(("anthropic", lambda: ChatAnthropic(
+                    temperature=0.1,
+                    max_tokens=1024,
+                    model="claude-2"
+                )))
+            except Exception as e:
+                logger.warning(f"Anthropic initialization error: {e}")
+        
+        # Any other API LLMs could be added here
+        
+        # Ollama (lowest priority) - local models
+        if _HAS_LANGCHAIN:
+            try:
+                # Use environment variable or default to user's preferred model
+                default_model = os.getenv("DEFAULT_LLM_MODEL", "llama2:7b")
+                self.providers.append(("ollama", lambda: ChatOllama(
+                    model=default_model,
+                    temperature=0.1,
+                    num_predict=1024
+                )))
+            except Exception as e:
+                logger.warning(f"Ollama initialization error: {e}")
+    
+    def get_llm(self):
+        """Get best available LLM provider with caching"""
+        if self.current_provider:
+            return self.current_provider
+        
+        for name, initializer in self.providers:
+            if name in self.provider_cache:
+                self.current_provider = self.provider_cache[name]
+                logger.info(f"Using cached LLM provider: {name}")
+                return self.current_provider
+            
+            try:
+                logger.info(f"Trying LLM provider: {name}")
+                llm = initializer()
+                # Test with a simple prompt
+                _ = llm.invoke("Hello")
+                self.current_provider = llm
+                self.provider_cache[name] = llm
+                logger.info(f"Successfully initialized LLM provider: {name}")
+                return llm
+            except Exception as e:
+                logger.warning(f"Failed to initialize {name}: {e}")
+        
+        logger.error("No LLM providers available")
+        return None
+
 class SemanticChunker:
     """Advanced semantic chunking with multiple strategies"""
     
     def __init__(self, embedding_model: str = "BAAI/bge-small-en-v1.5"):
         self.embedding_model = embedding_model
+        self.embedder = None
+        self._load_embedder()
+    
+    def _load_embedder(self):
+        """Lazy load embedder only when needed"""
         if _HAS_SENTENCE_TRANSFORMERS:
-            self.embedder = SentenceTransformer(embedding_model)
-        else:
-            self.embedder = None
+            try:
+                self.embedder = SentenceTransformer(self.embedding_model)
+            except Exception as e:
+                logger.warning(f"Could not load semantic chunker model: {e}")
+                self.embedder = None
     
     def semantic_split(self, text: str, chunk_size: int = 512, threshold: float = 0.5) -> List[str]:
         """Split text based on semantic similarity"""
+        if not self.embedder and _HAS_SENTENCE_TRANSFORMERS:
+            self._load_embedder()
+            
         if not self.embedder:
             return self._fallback_split(text, chunk_size)
         
@@ -262,31 +413,35 @@ class SemanticChunker:
         if len(sentences) <= 1:
             return [text]
         
-        embeddings = self.embedder.encode(sentences)
-        similarities = []
-        
-        for i in range(len(embeddings) - 1):
-            sim = F.cosine_similarity(
-                torch.tensor(embeddings[i]).unsqueeze(0),
-                torch.tensor(embeddings[i + 1]).unsqueeze(0)
-            ).item()
-            similarities.append(sim)
-        
-        # Find split points where similarity drops
-        chunks = []
-        current_chunk = [sentences[0]]
-        
-        for i, sim in enumerate(similarities):
-            if sim < threshold or len(' '.join(current_chunk)) > chunk_size:
+        try:
+            embeddings = self.embedder.encode(sentences)
+            similarities = []
+            
+            for i in range(len(embeddings) - 1):
+                sim = F.cosine_similarity(
+                    torch.tensor(embeddings[i]).unsqueeze(0),
+                    torch.tensor(embeddings[i + 1]).unsqueeze(0)
+                ).item()
+                similarities.append(sim)
+            
+            # Find split points where similarity drops
+            chunks = []
+            current_chunk = [sentences[0]]
+            
+            for i, sim in enumerate(similarities):
+                if sim < threshold or len(' '.join(current_chunk)) > chunk_size:
+                    chunks.append(' '.join(current_chunk))
+                    current_chunk = [sentences[i + 1]]
+                else:
+                    current_chunk.append(sentences[i + 1])
+            
+            if current_chunk:
                 chunks.append(' '.join(current_chunk))
-                current_chunk = [sentences[i + 1]]
-            else:
-                current_chunk.append(sentences[i + 1])
-        
-        if current_chunk:
-            chunks.append(' '.join(current_chunk))
-        
-        return chunks
+            
+            return chunks
+        except Exception as e:
+            logger.warning(f"Error in semantic splitting: {e}")
+            return self._fallback_split(text, chunk_size)
     
     def _split_into_sentences(self, text: str) -> List[str]:
         """Split text into sentences"""
@@ -318,13 +473,24 @@ class SemanticChunker:
 class AdvancedEmbedder:
     """Unified interface for multiple embedding models"""
     
+    # Global cache for embedders
+    _global_embedder_cache = {}
+    
     def __init__(self, model_name: str):
         self.model_name = model_name
         self.embedder = None
+        self.embed_method = "fallback"
+        self.cache = {}
         self._load_model()
     
     def _load_model(self):
-        """Load the embedding model with fallbacks"""
+        """Load the embedding model with caching and fallbacks"""
+        # Check global cache first
+        if self.model_name in self._global_embedder_cache:
+            self.embedder = self._global_embedder_cache[self.model_name]
+            self.embed_method = "cached"
+            return
+        
         try:
             if _HAS_FASTEMBED and "nomic" in self.model_name.lower():
                 self.embedder = TextEmbedding(self.model_name)
@@ -336,30 +502,64 @@ class AdvancedEmbedder:
                 logger.warning(f"Could not load {self.model_name}, using fallback")
                 self.embedder = None
                 self.embed_method = "fallback"
+            
+            # Cache successful loads
+            if self.embedder and self.embed_method != "fallback":
+                self._global_embedder_cache[self.model_name] = self.embedder
         except Exception as e:
             logger.error(f"Error loading embedding model: {e}")
             self.embedder = None
             self.embed_method = "fallback"
     
     def encode(self, texts: Union[str, List[str]]) -> np.ndarray:
-        """Encode texts to embeddings"""
+        """Encode texts to embeddings with caching"""
         if isinstance(texts, str):
             texts = [texts]
         
-        if self.embedder is None:
-            return np.random.random((len(texts), 384))  # Fallback
+        # Create hash keys for cache
+        cache_keys = [hashlib.md5(text.encode()).hexdigest() for text in texts]
         
-        try:
-            if self.embed_method == "fastembed":
-                embeddings = list(self.embedder.embed(texts))
-                return np.array(embeddings)
-            elif self.embed_method == "sentence_transformers":
-                return self.embedder.encode(texts)
+        # Check cache first
+        uncached_texts = []
+        uncached_indices = []
+        results = [None] * len(texts)
+        
+        for i, (text, key) in enumerate(zip(texts, cache_keys)):
+            if key in self.cache:
+                results[i] = self.cache[key]
             else:
-                return np.random.random((len(texts), 384))
-        except Exception as e:
-            logger.error(f"Error encoding texts: {e}")
-            return np.random.random((len(texts), 384))
+                uncached_texts.append(text)
+                uncached_indices.append(i)
+        
+        # If all from cache, return concatenated
+        if not uncached_texts:
+            return np.array(results)
+        
+        # Compute embeddings for uncached texts
+        if self.embedder is None:
+            new_embeddings = np.random.random((len(uncached_texts), 384))
+        else:
+            try:
+                if self.embed_method == "fastembed":
+                    new_embeddings = np.array(list(self.embedder.embed(uncached_texts)))
+                elif self.embed_method == "sentence_transformers":
+                    new_embeddings = self.embedder.encode(uncached_texts)
+                else:
+                    new_embeddings = np.random.random((len(uncached_texts), 384))
+                    
+                # Update cache with new embeddings
+                for i, (text, key) in enumerate(zip(uncached_texts, [cache_keys[j] for j in uncached_indices])):
+                    self.cache[key] = new_embeddings[i]
+                    
+            except Exception as e:
+                logger.error(f"Error encoding texts: {e}")
+                new_embeddings = np.random.random((len(uncached_texts), 384))
+        
+        # Merge cached and new embeddings
+        for i, emb in zip(uncached_indices, new_embeddings):
+            results[i] = emb
+        
+        return np.array(results)
 
 class HybridRetriever:
     """Advanced hybrid retrieval combining multiple methods"""
@@ -450,8 +650,11 @@ class HybridRetriever:
         if _HAS_LANGCHAIN:
             try:
                 self.vector_store = FAISS.from_documents(documents, embeddings)
-            except:
-                self.vector_store = Chroma.from_documents(documents, embeddings)
+            except Exception:
+                try:
+                    self.vector_store = Chroma.from_documents(documents, embeddings)
+                except Exception as e:
+                    logger.error(f"Error setting up fallback vector store: {e}")
 
 class RAPTORRetriever:
     """RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval"""
@@ -553,17 +756,25 @@ class MultiModalProcessor:
     def __init__(self):
         self.ocr_reader = None
         self.vision_model = None
+        self.vision_processor = None
         self._setup_models()
     
     def _setup_models(self):
-        """Setup multi-modal models"""
-        if _HAS_OCR:
+        """Setup multi-modal models with lazy loading"""
+        # Models will be loaded on demand to save memory
+        pass
+        
+    def _load_ocr(self):
+        """Lazy load OCR model"""
+        if self.ocr_reader is None and _HAS_OCR:
             try:
                 self.ocr_reader = easyocr.Reader(['en'])
             except Exception as e:
                 logger.warning(f"Could not setup OCR: {e}")
-        
-        if _HAS_TRANSFORMERS:
+    
+    def _load_vision_model(self):
+        """Lazy load vision model"""
+        if self.vision_model is None and _HAS_TRANSFORMERS:
             try:
                 self.vision_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
                 self.vision_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
@@ -575,12 +786,20 @@ class MultiModalProcessor:
         result = {"text": "", "description": ""}
         
         try:
+            # Lazy load OCR
+            if _HAS_OCR and self.ocr_reader is None:
+                self._load_ocr()
+                
             if _HAS_OCR and self.ocr_reader:
                 # Extract text using OCR
                 ocr_result = self.ocr_reader.readtext(image_path)
                 result["text"] = " ".join([item[1] for item in ocr_result])
             
-            if _HAS_TRANSFORMERS and self.vision_model:
+            # Lazy load vision model
+            if _HAS_TRANSFORMERS and self.vision_model is None:
+                self._load_vision_model()
+                
+            if _HAS_TRANSFORMERS and self.vision_model and self.vision_processor:
                 # Generate image description
                 from PIL import Image
                 image = Image.open(image_path)
@@ -662,7 +881,7 @@ class AdvancedRAGSystem:
         self.metadata = []
         
         # Models
-        self.llm = None
+        self.llm_provider = LLMProvider()
         self.reranker = None
         
         # Statistics
@@ -673,20 +892,7 @@ class AdvancedRAGSystem:
             "avg_response_time": 0.0
         }
         
-        self._setup_models()
         logger.info(f"Initialized AdvancedRAGSystem with {config.embedding_model.value}")
-    
-    def _setup_models(self):
-        """Setup LLM and other models"""
-        try:
-            if _HAS_LANGCHAIN:
-                self.llm = ChatOllama(
-                    model=self.config.llm_model.value,
-                    temperature=self.config.temperature,
-                    num_predict=self.config.max_tokens
-                )
-        except Exception as e:
-            logger.error(f"Error setting up LLM: {e}")
     
     def add_documents(self, documents: List[str], metadata: List[Dict] = None):
         """Add documents to the RAG system"""
@@ -761,71 +967,20 @@ class AdvancedRAGSystem:
             unique_docs = self._deduplicate_documents(all_docs)
             reranked_docs = self._rerank_documents(question, unique_docs)
 
-            # --- Entity-aware analytics ---
-            entity_answer = ""
-            if intents:
-                # Aggregate metadata from top chunks
-                top_metas = [doc.metadata for doc in reranked_docs[:10] if doc.metadata]
-                if "want_emails" in intents:
-                    emails = set()
-                    for meta in top_metas:
-                        emails.update(meta.get("emails", []))
-                    if emails:
-                        entity_answer += f"\n**Emails found:**\n" + "\n".join(sorted(emails))
-                if "want_links" in intents:
-                    links = set()
-                    for meta in top_metas:
-                        links.update(meta.get("social_links", []))
-                    if links:
-                        entity_answer += f"\n**Social/Professional Links:**\n" + "\n".join(sorted(links))
-                if "want_names" in intents:
-                    names = set()
-                    for meta in top_metas:
-                        names.update(meta.get("names", []))
-                    if names:
-                        entity_answer += f"\n**Candidate Names:**\n" + "\n".join(sorted(names))
-                if "want_skills" in intents:
-                    skills = set()
-                    for meta in top_metas:
-                        skills.update(meta.get("skills", []))
-                    if skills:
-                        entity_answer += f"\n**Skills Identified:**\n" + ", ".join(sorted(skills))
-                if "want_ranking" in intents:
-                    # Example: rank by Python/AWS experience
-                    ranking = []
-                    for meta in top_metas:
-                        score = 0
-                        skills = set(meta.get("skills", []))
-                        exp_years = meta.get("experience_years", [])
-                        if "python" in skills:
-                            score += 2
-                        if "aws" in skills:
-                            score += 2
-                        score += sum(exp_years)
-                        ranking.append((meta.get("file", "unknown"), score, skills, exp_years))
-                    ranking.sort(key=lambda x: x[1], reverse=True)
-                    entity_answer += "\n**Candidate Ranking (Python/AWS/Experience):**\n"
-                    for fname, score, skills, exp in ranking[:5]:
-                        entity_answer += f"{fname}: Score={score}, Skills={', '.join(skills)}, Experience={exp}\n"
-                if "want_eda" in intents:
-                    # Show EDA stats if available
-                    for meta in top_metas:
-                        if "readability" in meta:
-                            entity_answer += f"\nReadability: {meta['readability']}\n"
-                        if "skills" in meta:
-                            entity_answer += f"Skills: {', '.join(meta['skills'])}\n"
-                        if "education" in meta:
-                            entity_answer += f"Education: {', '.join(meta['education'])}\n"
-                        if "certifications" in meta:
-                            entity_answer += f"Certifications: {', '.join(meta['certifications'])}\n"
+            # Entity-aware analytics
+            entity_answer = self._process_entity_analytics(intents, reranked_docs)
+            
             # Generate response
             response = self._generate_response(question, reranked_docs)
+            
             # Self-correction if enabled
             if self.config.enable_self_correction:
                 response = self._self_correct_response(question, response, reranked_docs)
+            
             # Combine entity analytics with LLM answer
             if entity_answer:
                 response = f"{response}\n\n---\n{entity_answer.strip()}"
+            
             # Prepare result
             result = {
                 "answer": response,
@@ -841,12 +996,14 @@ class AdvancedRAGSystem:
                 "processing_time": time.time() - start_time,
                 "recommendations": recommendations
             }
+            
             # Update stats
             self.stats["queries_processed"] += 1
             self.stats["avg_response_time"] = (
                 (self.stats["avg_response_time"] * (self.stats["queries_processed"] - 1) + result["processing_time"])
                 / self.stats["queries_processed"]
             )
+            
             return result
         except Exception as e:
             logger.error(f"Error processing query: {e}")
@@ -857,6 +1014,97 @@ class AdvancedRAGSystem:
                 "processing_time": time.time() - start_time,
                 "error": str(e)
             }
+    
+    async def query_async(self, question: str, **kwargs) -> Dict[str, Any]:
+        """Asynchronous version of query method"""
+        start_time = time.time()
+        try:
+            # Get recommendations from feedback system
+            recommendations = self.feedback_system.get_recommendations(question)
+            # Detect user intent
+            intents = extract_intent(question)
+            # Adaptive strategy selection
+            strategy = self._select_strategy(question, recommendations)
+            
+            # Multi-query generation for RAG fusion
+            queries = self._generate_multiple_queries(question) if strategy == RetrievalStrategy.RAG_FUSION else [question]
+            
+            # Retrieve relevant documents (in parallel)
+            retrieval_tasks = []
+            for query in queries:
+                retrieval_tasks.append(self._retrieve_documents_async(query, strategy))
+            
+            # Gather results when all complete
+            all_docs_lists = await asyncio.gather(*retrieval_tasks)
+            all_docs = [doc for docs in all_docs_lists for doc in docs]
+            
+            # Remove duplicates and rerank
+            unique_docs = self._deduplicate_documents(all_docs)
+            reranked_docs = self._rerank_documents(question, unique_docs)
+            
+            # Entity-aware analytics
+            entity_answer = self._process_entity_analytics(intents, reranked_docs)
+            
+            # Generate response
+            response = self._generate_response(question, reranked_docs)
+            
+            # Self-correction if enabled
+            if self.config.enable_self_correction:
+                response = self._self_correct_response(question, response, reranked_docs)
+            
+            # Combine entity analytics with LLM answer
+            if entity_answer:
+                response = f"{response}\n\n---\n{entity_answer.strip()}"
+            
+            # Prepare result
+            result = {
+                "answer": response,
+                "source_documents": [
+                    {
+                        "content": doc.page_content,
+                        "metadata": doc.metadata,
+                        "relevance_score": getattr(doc, 'relevance_score', 0.0)
+                    }
+                    for doc in reranked_docs[:5]
+                ],
+                "strategy_used": strategy.value,
+                "processing_time": time.time() - start_time,
+                "recommendations": recommendations
+            }
+            
+            # Update stats
+            self.stats["queries_processed"] += 1
+            self.stats["avg_response_time"] = (
+                (self.stats["avg_response_time"] * (self.stats["queries_processed"] - 1) + result["processing_time"])
+                / self.stats["queries_processed"]
+            )
+            
+            return result
+        except Exception as e:
+            logger.error(f"Error processing query: {e}")
+            return {
+                "answer": f"I encountered an error processing your query: {str(e)}",
+                "source_documents": [],
+                "strategy_used": "error",
+                "processing_time": time.time() - start_time,
+                "error": str(e)
+            }
+    
+    async def _retrieve_documents_async(self, query: str, strategy: RetrievalStrategy) -> List[Document]:
+        """Asynchronous document retrieval"""
+        return await asyncio.to_thread(self._retrieve_documents, query, strategy)
+
+    def batch_query(self, questions: List[str], **kwargs) -> List[Dict[str, Any]]:
+        """Process multiple queries in batch for efficiency"""
+        results = []
+        for question in questions:
+            results.append(self.query(question, **kwargs))
+        return results
+
+    async def batch_query_async(self, questions: List[str], **kwargs) -> List[Dict[str, Any]]:
+        """Process multiple queries asynchronously"""
+        tasks = [self.query_async(q, **kwargs) for q in questions]
+        return await asyncio.gather(*tasks)
     
     def _select_strategy(self, query: str, recommendations: Dict) -> RetrievalStrategy:
         """Intelligently select retrieval strategy"""
@@ -888,6 +1136,68 @@ class AdvancedRAGSystem:
         
         queries.extend(variations[:2])  # Limit to avoid too many queries
         return queries
+    
+    def _process_entity_analytics(self, intents: List[str], documents: List[Document]) -> str:
+        """Process entity-aware analytics"""
+        entity_answer = ""
+        
+        if intents:
+            # Aggregate metadata from top chunks
+            top_metas = [doc.metadata for doc in documents[:10] if doc.metadata]
+            if "want_emails" in intents:
+                emails = set()
+                for meta in top_metas:
+                    emails.update(meta.get("emails", []))
+                if emails:
+                    entity_answer += f"\n**Emails found:**\n" + "\n".join(sorted(emails))
+            if "want_links" in intents:
+                links = set()
+                for meta in top_metas:
+                    links.update(meta.get("social_links", []))
+                if links:
+                    entity_answer += f"\n**Social/Professional Links:**\n" + "\n".join(sorted(links))
+            if "want_names" in intents:
+                names = set()
+                for meta in top_metas:
+                    names.update(meta.get("names", []))
+                if names:
+                    entity_answer += f"\n**Candidate Names:**\n" + "\n".join(sorted(names))
+            if "want_skills" in intents:
+                skills = set()
+                for meta in top_metas:
+                    skills.update(meta.get("skills", []))
+                if skills:
+                    entity_answer += f"\n**Skills Identified:**\n" + ", ".join(sorted(skills))
+            if "want_ranking" in intents:
+                # Example: rank by Python/AWS experience
+                ranking = []
+                for meta in top_metas:
+                    score = 0
+                    skills = set(meta.get("skills", []))
+                    exp_years = meta.get("experience_years", [])
+                    if "python" in skills:
+                        score += 2
+                    if "aws" in skills:
+                        score += 2
+                    score += sum(exp_years)
+                    ranking.append((meta.get("file", "unknown"), score, skills, exp_years))
+                ranking.sort(key=lambda x: x[1], reverse=True)
+                entity_answer += "\n**Candidate Ranking (Python/AWS/Experience):**\n"
+                for fname, score, skills, exp in ranking[:5]:
+                    entity_answer += f"{fname}: Score={score}, Skills={', '.join(skills)}, Experience={exp}\n"
+            if "want_eda" in intents:
+                # Show EDA stats if available
+                for meta in top_metas:
+                    if "readability" in meta:
+                        entity_answer += f"\nReadability: {meta['readability']}\n"
+                    if "skills" in meta:
+                        entity_answer += f"Skills: {', '.join(meta['skills'])}\n"
+                    if "education" in meta:
+                        entity_answer += f"Education: {', '.join(meta['education'])}\n"
+                    if "certifications" in meta:
+                        entity_answer += f"Certifications: {', '.join(meta['certifications'])}\n"
+        
+        return entity_answer
     
     def _retrieve_documents(self, query: str, strategy: RetrievalStrategy) -> List[Document]:
         """Retrieve documents using specified strategy"""
@@ -994,7 +1304,12 @@ class AdvancedRAGSystem:
             # Add relevance scores to documents
             reranked_docs = []
             for doc, score in scored_docs[:self.config.rerank_top_k]:
-                doc.relevance_score = float(score)
+                try:
+                    doc.relevance_score = float(score)
+                except AttributeError:
+                    # If we can't set the attribute, add it to metadata
+                    if hasattr(doc, 'metadata') and doc.metadata is not None:
+                        doc.metadata['relevance_score'] = float(score)
                 reranked_docs.append(doc)
             
             return reranked_docs
@@ -1004,14 +1319,19 @@ class AdvancedRAGSystem:
             return documents[:self.config.rerank_top_k]
     
     def _generate_response(self, query: str, documents: List[Document]) -> str:
-        """Generate response using LLM"""
-        if not self.llm:
-            return "LLM not available for response generation."
+        """Generate response using LLM with prioritized fallback"""
+        if not documents:
+            return "No relevant documents found to answer your question."
+        
+        # Get LLM only when needed (lazy loading)
+        llm = self.llm_provider.get_llm()
+        if not llm:
+            return "No available language models to generate a response."
         
         # Prepare context
         context = "\n\n".join([
             f"Document {i+1}:\n{doc.page_content}"
-            for i, doc in enumerate(documents)
+            for i, doc in enumerate(documents[:5])  # Limit to top 5 docs for performance
         ])
         
         # Create prompt
@@ -1025,18 +1345,17 @@ Question: {query}
 Answer: Provide a comprehensive answer based on the context. If the information is not available in the context, say so clearly."""
         
         try:
-            if _HAS_LANGCHAIN:
-                response = self.llm.invoke(prompt)
-                return response.content if hasattr(response, 'content') else str(response)
-            else:
-                return "Response generation not available."
+            response = llm.invoke(prompt)
+            return response.content if hasattr(response, 'content') else str(response)
         except Exception as e:
             logger.error(f"Error generating response: {e}")
             return f"Error generating response: {str(e)}"
     
     def _self_correct_response(self, query: str, response: str, documents: List[Document]) -> str:
         """Self-correct the response for accuracy and completeness"""
-        if not self.llm:
+        # Get LLM only when needed
+        llm = self.llm_provider.get_llm()
+        if not llm:
             return response
         
         correction_prompt = f"""Please review and improve the following answer for accuracy and completeness.
@@ -1050,7 +1369,7 @@ Available Context:
 Improved Answer: Provide a corrected and enhanced version of the answer."""
         
         try:
-            corrected = self.llm.invoke(correction_prompt)
+            corrected = llm.invoke(correction_prompt)
             return corrected.content if hasattr(corrected, 'content') else response
         except Exception as e:
             logger.error(f"Error in self-correction: {e}")
@@ -1108,6 +1427,18 @@ Improved Answer: Provide a corrected and enhanced version of the answer."""
             },
             "feedback_history_size": len(self.feedback_system.feedback_history),
             "query_patterns": dict(self.feedback_system.query_patterns)
+        }
+    
+    def get_system_stats(self) -> Dict[str, Any]:
+        """Get extended system statistics with more details"""
+        return {
+            **self.get_stats(),
+            "system_info": {
+                "embedder_type": self.embedder.embed_method,
+                "vector_db_type": self.config.vector_db,
+                "llm_provider": self.llm_provider.current_provider.__class__.__name__ if self.llm_provider.current_provider else "None",
+                "available_providers": [name for name, _ in self.llm_provider.providers]
+            }
         }
     
     def record_feedback(self, query: str, response: str, rating: float):

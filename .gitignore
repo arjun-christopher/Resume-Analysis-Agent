@@ -219,3 +219,4 @@ data/index
 .vscode/extensions.json
 .history/
 .vscode/
+.dist/
