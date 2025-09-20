@@ -100,8 +100,8 @@ graph TB
 ### Quick Install
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/RAG-Resume.git
-cd RAG-Resume
+git clone https://github.com/your-username/Resume-Analysis-Agent.git
+cd Resume-Analysis-Agent
 
 # Install dependencies
 pip install -r requirements.txt
@@ -555,8 +555,8 @@ MIT License - see LICENSE file for details.
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/your-username/RAG-Resume/issues)
-- **Documentation**: [Project Wiki](https://github.com/your-username/RAG-Resume/wiki)
+- **Issues**: [GitHub Issues](https://github.com/your-username/Resume-Analysis-Agent/issues)
+- **Documentation**: [Project Wiki](https://github.com/your-username/Resume-Analysis-Agent/wiki)
 
 ---
 
