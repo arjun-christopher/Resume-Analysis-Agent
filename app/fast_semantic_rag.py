@@ -277,21 +277,22 @@ class FastPatternExtractor:
     """Lightning-fast pattern extraction and semantic analysis"""
     
     def __init__(self):
+        # Import the enhanced parsing functions
+        from .parsing import _extract_comprehensive_entities, _extract_enhanced_social_links, EXTENDED_SKILLS
+        
+        self._extract_comprehensive_entities = _extract_comprehensive_entities
+        self._extract_enhanced_social_links = _extract_enhanced_social_links
+        self.extended_skills = EXTENDED_SKILLS
+        
+        # Basic patterns for quick extraction
         self.email_pattern = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
         self.phone_pattern = re.compile(r'\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b')
         self.url_pattern = re.compile(r'https?://[^\s<>"{}|\\^`\[\]]+')
         self.linkedin_pattern = re.compile(r'linkedin\.com/in/[\w\-\.]+', re.IGNORECASE)
         self.github_pattern = re.compile(r'github\.com/[\w\-\.]+', re.IGNORECASE)
         
-        # Skills patterns (common resume skills)
-        self.tech_skills = {
-            'python', 'java', 'javascript', 'typescript', 'c++', 'c#', 'go', 'rust', 'ruby', 'php',
-            'react', 'angular', 'vue', 'node.js', 'django', 'flask', 'fastapi', 'spring',
-            'mysql', 'postgresql', 'mongodb', 'redis', 'elasticsearch',
-            'aws', 'azure', 'gcp', 'docker', 'kubernetes', 'jenkins',
-            'machine learning', 'deep learning', 'ai', 'nlp', 'computer vision',
-            'tensorflow', 'pytorch', 'scikit-learn', 'pandas', 'numpy'
-        }
+        # Enhanced skill patterns - use the comprehensive skills database
+        self.tech_skills = self.extended_skills
         
         # Compile skill patterns for speed
         self.skill_patterns = {
@@ -300,65 +301,42 @@ class FastPatternExtractor:
         }
     
     def extract_patterns(self, text: str) -> Dict[str, Any]:
-        """Fast extraction of all patterns from text"""
+        """Fast extraction of all patterns using enhanced parsing logic"""
+        # Use the comprehensive entity extraction for better results
+        comprehensive_entities = self._extract_comprehensive_entities(text)
+        
+        # Convert to the expected format and add fast patterns
         result = {
-            'emails': [],
-            'phones': [],
-            'urls': [],
+            'names': comprehensive_entities.get('names', []),
+            'emails': comprehensive_entities.get('emails', []),
+            'phones': comprehensive_entities.get('phones', []),
+            'urls': self.url_pattern.findall(text),
             'linkedin': [],
             'github': [],
-            'skills': [],
-            'experience_years': [],
-            'education': [],
-            'certifications': []
+            'skills': comprehensive_entities.get('skills', []),
+            'experience_years': comprehensive_entities.get('experience_years', []),
+            'education': comprehensive_entities.get('education', []),
+            'certifications': comprehensive_entities.get('certifications', []),
+            'organizations': comprehensive_entities.get('organizations', []),
+            'locations': comprehensive_entities.get('locations', [])
         }
         
-        # Extract basic patterns
-        result['emails'] = self.email_pattern.findall(text)
-        result['phones'] = self.phone_pattern.findall(text)
-        result['urls'] = self.url_pattern.findall(text)
-        result['linkedin'] = self.linkedin_pattern.findall(text)
-        result['github'] = self.github_pattern.findall(text)
+        # Extract enhanced social links
+        social_links = self._extract_enhanced_social_links(text)
+        for link in social_links:
+            if 'linkedin.com' in link.lower():
+                result['linkedin'].append(link)
+            elif 'github.com' in link.lower():
+                result['github'].append(link)
         
-        # Extract skills
-        text_lower = text.lower()
-        for skill, pattern in self.skill_patterns.items():
-            if pattern.search(text):
-                result['skills'].append(skill)
+        # Add fast LinkedIn and GitHub detection as backup
+        result['linkedin'].extend(self.linkedin_pattern.findall(text))
+        result['github'].extend(self.github_pattern.findall(text))
         
-        # Extract experience years
-        exp_patterns = [
-            r'(\d+)\+?\s*years?\s*(?:of\s*)?(?:experience|exp)',
-            r'(\d+)\+?\s*yrs?\s*(?:of\s*)?(?:experience|exp)',
-            r'experience[:\s]*(\d+)\+?\s*years?',
-            r'(\d+)\+?\s*years?\s*in',
-        ]
-        
-        for pattern in exp_patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            result['experience_years'].extend([int(m) for m in matches if m.isdigit()])
-        
-        # Extract education (simple patterns)
-        edu_patterns = [
-            r'\b(?:bachelor|master|phd|doctorate|mba|bs|ms|ba|ma)\b',
-            r'\b(?:university|college|institute)\b',
-            r'\b(?:computer science|engineering|mathematics|physics|business)\b'
-        ]
-        
-        for pattern in edu_patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            result['education'].extend(matches)
-        
-        # Extract certifications
-        cert_patterns = [
-            r'\b(?:aws|azure|gcp|google)\s*(?:certified|certification)\b',
-            r'\b(?:cissp|cism|cisa|pmp|scrum master)\b',
-            r'\bcertified\s+[\w\s]+\b'
-        ]
-        
-        for pattern in cert_patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            result['certifications'].extend(matches)
+        # Remove duplicates
+        for key in result:
+            if isinstance(result[key], list):
+                result[key] = list(dict.fromkeys(result[key]))  # Preserve order while removing duplicates
         
         return result
 
@@ -807,50 +785,95 @@ class FastSemanticRAG:
             }
     
     def _extract_pattern_insights(self, question: str, search_results: List[Tuple[str, Dict, float]]) -> str:
-        """Extract pattern-based insights from search results"""
+        """Extract pattern-based insights from search results using enhanced entity extraction"""
         question_lower = question.lower()
         insights = []
         
         # Aggregate patterns from search results
+        all_names = set()
         all_emails = set()
+        all_phones = set()
         all_skills = set()
         all_linkedin = set()
         all_github = set()
+        all_organizations = set()
+        all_locations = set()
         all_experience = []
+        all_certifications = set()
+        all_education = set()
         
         for _, metadata, _ in search_results:
+            all_names.update(metadata.get('names', []))
             all_emails.update(metadata.get('emails', []))
+            all_phones.update(metadata.get('phones', []))
             all_skills.update(metadata.get('skills', []))
             all_linkedin.update(metadata.get('linkedin', []))
             all_github.update(metadata.get('github', []))
+            all_organizations.update(metadata.get('organizations', []))
+            all_locations.update(metadata.get('locations', []))
             all_experience.extend(metadata.get('experience_years', []))
+            all_certifications.update(metadata.get('certifications', []))
+            all_education.update(metadata.get('education', []))
         
         # Generate insights based on question patterns
+        if any(word in question_lower for word in ['name', 'who', 'person', 'candidate']):
+            if all_names:
+                insights.append(f"**👤 Names Found:**\n" + '\n'.join(f"• {name}" for name in sorted(all_names)[:5]))
+        
         if any(word in question_lower for word in ['email', 'contact', 'reach']):
             if all_emails:
-                insights.append(f"**📧 Email Addresses Found:**\n" + '\n'.join(f"• {email}" for email in sorted(all_emails)))
+                insights.append(f"**📧 Contact Information:**\n" + '\n'.join(f"• {email}" for email in sorted(all_emails)))
+            if all_phones:
+                insights.append(f"**📱 Phone Numbers:**\n" + '\n'.join(f"• {phone}" for phone in sorted(all_phones)))
         
-        if any(word in question_lower for word in ['skill', 'technology', 'tech', 'programming']):
+        if any(word in question_lower for word in ['skill', 'technology', 'tech', 'programming', 'competenc']):
             if all_skills:
                 skill_counts = Counter([skill.lower() for skill in all_skills])
-                insights.append(f"**💻 Technical Skills:**\n" + '\n'.join(f"• {skill}" for skill in list(skill_counts.keys())[:10]))
+                top_skills = list(skill_counts.keys())[:15]  # Show top 15 skills
+                insights.append(f"**💻 Technical Skills:**\n" + '\n'.join(f"• {skill}" for skill in top_skills))
         
         if any(word in question_lower for word in ['linkedin', 'profile', 'social']):
             if all_linkedin:
-                insights.append(f"**🔗 LinkedIn Profiles:**\n" + '\n'.join(f"• {profile}" for profile in sorted(all_linkedin)))
+                insights.append(f"**🔗 LinkedIn Profiles:**\n" + '\n'.join(f"• https://{profile}" if not profile.startswith('http') else f"• {profile}" for profile in sorted(all_linkedin)))
         
-        if any(word in question_lower for word in ['github', 'code', 'repository']):
+        if any(word in question_lower for word in ['github', 'code', 'repository', 'repo']):
             if all_github:
-                insights.append(f"**🐙 GitHub Profiles:**\n" + '\n'.join(f"• {profile}" for profile in sorted(all_github)))
+                insights.append(f"**🐙 GitHub Profiles:**\n" + '\n'.join(f"• https://{profile}" if not profile.startswith('http') else f"• {profile}" for profile in sorted(all_github)))
         
-        if any(word in question_lower for word in ['experience', 'years', 'senior']):
+        if any(word in question_lower for word in ['company', 'organization', 'employer', 'work']):
+            if all_organizations:
+                insights.append(f"**🏢 Organizations:**\n" + '\n'.join(f"• {org}" for org in sorted(all_organizations)[:10]))
+        
+        if any(word in question_lower for word in ['location', 'where', 'city', 'address']):
+            if all_locations:
+                insights.append(f"**📍 Locations:**\n" + '\n'.join(f"• {loc}" for loc in sorted(all_locations)[:5]))
+        
+        if any(word in question_lower for word in ['experience', 'years', 'senior', 'veteran']):
             if all_experience:
-                avg_exp = sum(all_experience) / len(all_experience)
-                max_exp = max(all_experience)
-                insights.append(f"**📈 Experience Analysis:**\n• Average: {avg_exp:.1f} years\n• Maximum: {max_exp} years\n• Experience range: {min(all_experience)}-{max_exp} years")
+                # Convert to numbers if they're strings
+                numeric_exp = []
+                for exp in all_experience:
+                    if isinstance(exp, str) and exp.isdigit():
+                        numeric_exp.append(int(exp))
+                    elif isinstance(exp, (int, float)):
+                        numeric_exp.append(exp)
+                
+                if numeric_exp:
+                    avg_exp = sum(numeric_exp) / len(numeric_exp)
+                    max_exp = max(numeric_exp)
+                    min_exp = min(numeric_exp)
+                    insights.append(f"**📈 Experience Analysis:**\n• Average: {avg_exp:.1f} years\n• Maximum: {max_exp} years\n• Range: {min_exp}-{max_exp} years")
+        
+        if any(word in question_lower for word in ['certification', 'certified', 'credential']):
+            if all_certifications:
+                insights.append(f"**🏆 Certifications:**\n" + '\n'.join(f"• {cert}" for cert in sorted(all_certifications)[:10]))
+        
+        if any(word in question_lower for word in ['education', 'degree', 'university', 'college', 'school']):
+            if all_education:
+                insights.append(f"**🎓 Education:**\n" + '\n'.join(f"• {edu}" for edu in sorted(all_education)[:5]))
         
         if any(word in question_lower for word in ['eda', 'analysis', 'overview', 'summary']):
-            # Generate EDA summary
+            # Generate comprehensive EDA summary
             texts = [result[0] for result in search_results]
             eda_summary = self.eda_processor.semantic_summary(texts)
             insights.append(f"**📊 Semantic Analysis:**\n{eda_summary}")
