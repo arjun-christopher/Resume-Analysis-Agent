@@ -35,8 +35,10 @@ st.title("Resume Analysis Agent — RAG")
 with st.sidebar:
     st.header("Upload Resumes")
     uploaded = st.file_uploader(
-        "Drop PDF or Word files here", type=["pdf","doc","docx"], accept_multiple_files=True,
-        help="Only PDFs and Word documents are supported"
+        "Drop PDF or Word files here",
+        type=["pdf", "doc", "docx"],
+        accept_multiple_files=True,
+        help="Only PDFs and Word documents are supported",
     )
 
     if uploaded:
@@ -52,10 +54,15 @@ with st.sidebar:
             chunks, metas, records = extract_docs_to_chunks_and_records(saved_files)
             if chunks:
                 # Convert to the format expected by fast semantic RAG
-                documents = [chunk.page_content if hasattr(chunk, 'page_content') else str(chunk) for chunk in chunks]
+                documents = [
+                    chunk.page_content if hasattr(chunk, "page_content") else str(chunk)
+                    for chunk in chunks
+                ]
                 metadata = [meta for meta in metas]
                 st.session_state.agent.add_documents(documents, metadata)
-        st.success(f"Uploaded & indexed {len(saved_files)} file(s) in {time.time()-start:.2f}s")
+        st.success(
+            f"Uploaded & indexed {len(saved_files)} file(s) in {time.time()-start:.2f}s"
+        )
 
     st.markdown("---")
     files = list_supported_files(UPLOAD_DIR)
@@ -73,16 +80,16 @@ with st.sidebar:
         # Clear directories completely
         clear_dir(UPLOAD_DIR)
         clear_dir(INDEX_DIR)
-        
+
         # Clear ALL session state variables
         for key in list(st.session_state.keys()):
             del st.session_state[key]
-        
+
         # Reinitialize essential state from scratch
         st.session_state.agent = create_fast_semantic_rag(str(INDEX_DIR))
         st.session_state.history = []
         st.session_state.manifest = {}
-        
+
         # Force complete UI refresh
         st.rerun()
 
@@ -90,12 +97,14 @@ with st.sidebar:
 st.subheader("AI-Powered Resume Analysis")
 
 if not st.session_state.history:
-    st.info("Upload PDFs or Word documents to build a searchable knowledge base, then ask questions about candidates.")
-    
+    st.info(
+        "Upload PDFs or Word documents to build a searchable knowledge base, then ask questions about candidates."
+    )
+
     # Example queries
     with st.expander("Example Questions", expanded=True):
         col1, col2 = st.columns(2)
-        
+
         with col1:
             st.markdown("**Analysis & Ranking:**")
             examples1 = [
@@ -103,13 +112,13 @@ if not st.session_state.history:
                 "Who has the most leadership experience?",
                 "Compare candidates' machine learning skills",
                 "Find candidates with 5+ years in data science",
-                "Which candidate is best for a senior developer role?"
+                "Which candidate is best for a senior developer role?",
             ]
             for ex in examples1:
                 if st.button(f"{ex}", key=f"ex1_{ex[:20]}"):
                     st.session_state.example_query = ex
                     st.rerun()
-        
+
         with col2:
             st.markdown("**Information Extraction:**")
             examples2 = [
@@ -117,7 +126,7 @@ if not st.session_state.history:
                 "Show candidates' educational backgrounds",
                 "Extract all certifications mentioned",
                 "What companies have candidates worked at?",
-                "Perform EDA analysis on the resume corpus"
+                "Perform EDA analysis on the resume corpus",
             ]
             for ex in examples2:
                 if st.button(f"{ex}", key=f"ex2_{ex[:20]}"):
@@ -130,7 +139,7 @@ for msg in st.session_state.history:
 
 # Handle example query selection first
 example_prompt = None
-if hasattr(st.session_state, 'example_query'):
+if hasattr(st.session_state, "example_query"):
     example_prompt = st.session_state.example_query
     del st.session_state.example_query
 
@@ -141,7 +150,7 @@ user_input = st.chat_input("Ask about the uploaded resumes…")
 prompt = example_prompt or user_input
 
 if prompt:
-    st.session_state.history.append({"role":"user","text":prompt})
+    st.session_state.history.append({"role": "user", "text": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
@@ -149,15 +158,15 @@ if prompt:
         with st.spinner("Analyzing resumes with advanced RAG..."):
             # Use advanced RAG system
             result = st.session_state.agent.query(prompt)
-            
+
             # Display main response
             st.markdown(result["answer"])
-            
+
             # Show processing stats
             processing_time = result.get("processing_time", 0)
             method = result.get("method", "unknown")
             source_docs = result.get("source_documents", [])
-            
+
             if source_docs:
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -166,7 +175,7 @@ if prompt:
                     st.metric("Processing Time", f"{processing_time:.2f}s")
                 with col3:
                     st.metric("Method", method.title())
-            
+
             # Show source documents if available
             if source_docs:
                 with st.expander("Source Documents", expanded=False):
@@ -174,24 +183,26 @@ if prompt:
                         st.markdown(f"**Document {i+1}:**")
                         # Handle both dict and object formats
                         if isinstance(doc, dict):
-                            content = doc.get('content', '')
-                            metadata = doc.get('metadata', {})
-                            relevance_score = doc.get('relevance_score', 0.0)
+                            content = doc.get("content", "")
+                            metadata = doc.get("metadata", {})
+                            relevance_score = doc.get("relevance_score", 0.0)
                         else:
-                            content = getattr(doc, 'page_content', '')
-                            metadata = getattr(doc, 'metadata', {})
-                            relevance_score = getattr(doc, 'relevance_score', 0.0)
-                        
-                        st.text(content[:500] + "..." if len(content) > 500 else content)
+                            content = getattr(doc, "page_content", "")
+                            metadata = getattr(doc, "metadata", {})
+                            relevance_score = getattr(doc, "relevance_score", 0.0)
+
+                        st.text(
+                            content[:500] + "..." if len(content) > 500 else content
+                        )
                         if metadata:
                             st.json(metadata)
                         if relevance_score > 0:
                             st.caption(f"Relevance Score: {relevance_score:.3f}")
                         st.markdown("---")
-            
+
             # Show system stats
             with st.expander("System Information", expanded=False):
                 stats = st.session_state.agent.get_system_stats()
                 st.json(stats)
-    
-    st.session_state.history.append({"role":"assistant","text":result["answer"]})
+
+    st.session_state.history.append({"role": "assistant", "text": result["answer"]})

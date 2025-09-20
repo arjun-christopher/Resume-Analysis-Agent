@@ -20,48 +20,47 @@ for dir_path in [DATA_DIR, UPLOAD_DIR, INDEX_DIR, CACHE_DIR, LOGS_DIR]:
 # Advanced Embedding Models
 EMBEDDING_MODELS = {
     # State-of-the-art models
-    "bge_m3": "BAAI/bge-m3",                           # Best multilingual
-    "bge_large_en": "BAAI/bge-large-en-v1.5",         # Best English
+    "bge_m3": "BAAI/bge-m3",  # Best multilingual
+    "bge_large_en": "BAAI/bge-large-en-v1.5",  # Best English
     "e5_mistral": "intfloat/e5-mistral-7b-instruct",  # Instruction-tuned
-    "e5_large_v2": "intfloat/e5-large-v2",            # High performance
+    "e5_large_v2": "intfloat/e5-large-v2",  # High performance
     "nomic_embed": "nomic-ai/nomic-embed-text-v1.5",  # Fast and efficient
-    "arctic_embed": "Snowflake/snowflake-arctic-embed-l", # Enterprise
-    "jina_v2": "jinaai/jina-embeddings-v2-base-en",   # Long context
-    "gte_large": "thenlper/gte-large",                 # General purpose
-    "instructor_xl": "hkunlp/instructor-xl",           # Domain-specific
-    "uae_large": "WhereIsAI/UAE-Large-V1",            # High quality
-    
+    "arctic_embed": "Snowflake/snowflake-arctic-embed-l",  # Enterprise
+    "jina_v2": "jinaai/jina-embeddings-v2-base-en",  # Long context
+    "gte_large": "thenlper/gte-large",  # General purpose
+    "instructor_xl": "hkunlp/instructor-xl",  # Domain-specific
+    "uae_large": "WhereIsAI/UAE-Large-V1",  # High quality
     # Efficient models for resource-constrained environments
     "all_minilm_l6": "sentence-transformers/all-MiniLM-L6-v2",
     "all_minilm_l12": "sentence-transformers/all-MiniLM-L12-v2",
-    "default": "BAAI/bge-m3"  # Default to best overall model
+    "default": "BAAI/bge-m3",  # Default to best overall model
 }
 
 # Latest Open-Source LLM Models
 OLLAMA_MODELS = {
     # Latest advanced models
-    "qwen2_5_72b": "qwen2.5:72b",          # Alibaba's most advanced
-    "qwen2_5_32b": "qwen2.5:32b",          # Best balance
-    "qwen2_5_14b": "qwen2.5:14b",          # Efficient option
-    "llama3_1_405b": "llama3.1:405b",      # Meta's largest
-    "llama3_1_70b": "llama3.1:70b",        # Production ready
-    "llama3_2_90b": "llama3.2:90b",        # Latest Llama
-    "phi3_5": "phi3.5:latest",             # Microsoft efficient
-    "mistral_nemo": "mistral-nemo:latest", # Latest Mistral
-    "gemma2_27b": "gemma2:27b",            # Google improved
-    "yi_34b": "yi:34b",                    # 01.AI powerful
-    "deepseek_coder": "deepseek-coder:33b", # Coding specialist
-    "deepseek_coder_latest": "deepseek-coder:latest", # Latest DeepSeek Coder
-    "deepseek_coder_1_3b": "deepseek-coder:1.3b", # Lightweight DeepSeek
-    "codellama_70b": "codellama:70b",      # Code generation
-    "mistral_latest": "mistral:latest",    # Latest Mistral
-    "llama3_2_latest": "llama3.2:latest", # Latest Llama 3.2
-    
+    "qwen2_5_72b": "qwen2.5:72b",  # Alibaba's most advanced
+    "qwen2_5_32b": "qwen2.5:32b",  # Best balance
+    "qwen2_5_14b": "qwen2.5:14b",  # Efficient option
+    "llama3_1_405b": "llama3.1:405b",  # Meta's largest
+    "llama3_1_70b": "llama3.1:70b",  # Production ready
+    "llama3_2_90b": "llama3.2:90b",  # Latest Llama
+    "phi3_5": "phi3.5:latest",  # Microsoft efficient
+    "mistral_nemo": "mistral-nemo:latest",  # Latest Mistral
+    "gemma2_27b": "gemma2:27b",  # Google improved
+    "yi_34b": "yi:34b",  # 01.AI powerful
+    "deepseek_coder": "deepseek-coder:33b",  # Coding specialist
+    "deepseek_coder_latest": "deepseek-coder:latest",  # Latest DeepSeek Coder
+    "deepseek_coder_1_3b": "deepseek-coder:1.3b",  # Lightweight DeepSeek
+    "codellama_70b": "codellama:70b",  # Code generation
+    "mistral_latest": "mistral:latest",  # Latest Mistral
+    "llama3_2_latest": "llama3.2:latest",  # Latest Llama 3.2
     # Legacy models for compatibility
     "llama2_7b": "llama2:7b",
     "mistral_7b": "mistral:7b",
-    "default": "llama2:7b"  # Default to user preference
+    "default": "llama2:7b",  # Default to user preference
 }
+
 
 # Retrieval Strategies
 class RetrievalStrategy(Enum):
@@ -74,6 +73,7 @@ class RetrievalStrategy(Enum):
     RAG_FUSION = "rag_fusion"
     ADAPTIVE = "adaptive"
 
+
 # Vector Database Options
 class VectorDB(Enum):
     QDRANT = "qdrant"
@@ -81,6 +81,7 @@ class VectorDB(Enum):
     PINECONE = "pinecone"
     CHROMA = "chroma"
     FAISS = "faiss"
+
 
 # Advanced RAG Configuration
 RAG_CONFIG = {
@@ -90,27 +91,24 @@ RAG_CONFIG = {
     "retrieval_k": int(os.getenv("TOP_K", 10)),
     "rerank_k": int(os.getenv("RERANK_TOP_K", 5)),
     "similarity_threshold": float(os.getenv("SIMILARITY_THRESHOLD", 0.7)),
-    
     # Advanced features
     "retrieval_strategy": os.getenv("RETRIEVAL_STRATEGY", "adaptive"),
     "vector_db": os.getenv("VECTOR_DB", "qdrant"),
     "enable_graph_rag": os.getenv("ENABLE_GRAPH_RAG", "true").lower() == "true",
     "enable_multimodal": os.getenv("ENABLE_MULTIMODAL", "true").lower() == "true",
-    "enable_self_correction": os.getenv("ENABLE_SELF_CORRECTION", "true").lower() == "true",
-    "enable_feedback_learning": os.getenv("ENABLE_FEEDBACK_LEARNING", "true").lower() == "true",
-    
+    "enable_self_correction": os.getenv("ENABLE_SELF_CORRECTION", "true").lower()
+    == "true",
+    "enable_feedback_learning": os.getenv("ENABLE_FEEDBACK_LEARNING", "true").lower()
+    == "true",
     # Performance settings
     "use_async": os.getenv("USE_ASYNC", "true").lower() == "true",
     "batch_size": int(os.getenv("BATCH_SIZE", 32)),
     "max_concurrent_requests": int(os.getenv("MAX_CONCURRENT_REQUESTS", 10)),
-    
     # Ensemble weights for hybrid retrieval
     "ensemble_weights": [0.7, 0.3],  # dense, sparse
-    
     # RAPTOR configuration
     "raptor_cluster_size": int(os.getenv("RAPTOR_CLUSTER_SIZE", 5)),
     "raptor_max_levels": int(os.getenv("RAPTOR_MAX_LEVELS", 3)),
-    
     # RAG Fusion settings
     "rag_fusion_queries": int(os.getenv("RAG_FUSION_QUERIES", 3)),
 }
@@ -131,7 +129,10 @@ MODEL_CONFIG = {
     "instructor_model": os.getenv("INSTRUCTOR_MODEL", "hkunlp/instructor-xl"),
     "fastembed_model": os.getenv("FASTEMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5"),
     "default_llm": os.getenv("DEFAULT_LLM_MODEL", "llama2:7b"),
-    "fallback_models": os.getenv("FALLBACK_MODELS", "mistral:latest,llama3.2:latest,deepseek-coder:latest,deepseek-coder:1.3b").split(","),
+    "fallback_models": os.getenv(
+        "FALLBACK_MODELS",
+        "mistral:latest,llama3.2:latest,deepseek-coder:latest,deepseek-coder:1.3b",
+    ).split(","),
 }
 
 # Vector Database Configurations
@@ -164,7 +165,7 @@ VECTOR_DB_CONFIG = {
     "faiss": {
         "index_path": str(INDEX_DIR / "faiss_index"),
         "index_type": "IVF",
-    }
+    },
 }
 
 # Graph Database Configuration (Neo4j)
@@ -199,18 +200,25 @@ PERFORMANCE_CONFIG = {
 # Evaluation and Monitoring
 EVALUATION_CONFIG = {
     "enable_evaluation": os.getenv("ENABLE_EVALUATION", "true").lower() == "true",
-    "evaluation_metrics": os.getenv("EVALUATION_METRICS", "faithfulness,answer_relevancy,context_precision,context_recall").split(","),
+    "evaluation_metrics": os.getenv(
+        "EVALUATION_METRICS",
+        "faithfulness,answer_relevancy,context_precision,context_recall",
+    ).split(","),
     "log_level": os.getenv("LOG_LEVEL", "INFO"),
-    "enable_detailed_logging": os.getenv("ENABLE_DETAILED_LOGGING", "false").lower() == "true",
+    "enable_detailed_logging": os.getenv("ENABLE_DETAILED_LOGGING", "false").lower()
+    == "true",
     "metrics_collection": os.getenv("METRICS_COLLECTION", "true").lower() == "true",
 }
 
 # Security and Privacy Settings
 SECURITY_CONFIG = {
-    "retain_uploaded_files": os.getenv("RETAIN_UPLOADED_FILES", "true").lower() == "true",
+    "retain_uploaded_files": os.getenv("RETAIN_UPLOADED_FILES", "true").lower()
+    == "true",
     "auto_delete_after_days": int(os.getenv("AUTO_DELETE_AFTER_DAYS", 30)),
-    "anonymize_personal_info": os.getenv("ANONYMIZE_PERSONAL_INFO", "false").lower() == "true",
-    "mask_email_addresses": os.getenv("MASK_EMAIL_ADDRESSES", "false").lower() == "true",
+    "anonymize_personal_info": os.getenv("ANONYMIZE_PERSONAL_INFO", "false").lower()
+    == "true",
+    "mask_email_addresses": os.getenv("MASK_EMAIL_ADDRESSES", "false").lower()
+    == "true",
     "mask_phone_numbers": os.getenv("MASK_PHONE_NUMBERS", "false").lower() == "true",
 }
 
@@ -257,6 +265,7 @@ LIGHTRAG_CONFIG = {
     "edge_max_consideration": 300,
 }
 
+
 def get_config() -> Dict[str, Any]:
     """Get complete configuration with all settings"""
     return {
@@ -287,6 +296,7 @@ def get_config() -> Dict[str, Any]:
         "api_keys": API_KEYS,
     }
 
+
 def get_model_config(model_type: str = "embedding") -> Dict[str, Any]:
     """Get specific model configuration"""
     if model_type == "embedding":
@@ -305,12 +315,14 @@ def get_model_config(model_type: str = "embedding") -> Dict[str, Any]:
     else:
         return {}
 
+
 def get_vector_db_config(db_type: str = None) -> Dict[str, Any]:
     """Get vector database configuration"""
     if db_type is None:
         db_type = RAG_CONFIG["vector_db"]
-    
+
     return VECTOR_DB_CONFIG.get(db_type, VECTOR_DB_CONFIG["faiss"])
+
 
 def update_config_from_env():
     """Update configuration from environment variables"""
@@ -318,10 +330,12 @@ def update_config_from_env():
     # Useful for runtime configuration updates
     pass
 
+
 def ensure_directories():
     """Ensure all required directories exist"""
     for dir_path in [DATA_DIR, UPLOAD_DIR, INDEX_DIR, CACHE_DIR, LOGS_DIR]:
         dir_path.mkdir(parents=True, exist_ok=True)
+
 
 # Initialize directories on import
 ensure_directories()
