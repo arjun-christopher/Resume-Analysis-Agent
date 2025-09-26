@@ -6,6 +6,11 @@ python-dotenv
 python-docx
 Pillow
 pypdf
+PyMuPDF  # fitz for advanced PDF processing
+dateparser  # For date parsing and normalization
+phonenumbers  # For phone number validation and formatting
+rapidfuzz  # For fuzzy matching skills
+flashtext  # For fast keyword extraction
 
 # Fast Semantic RAG Core
 fastembed
