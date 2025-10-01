@@ -79,12 +79,12 @@ try:
 except ImportError:
     _HAS_TEXTSTAT = False
 
-from certification_extractor import extract_certifications_comprehensive
-from project_extractor import extract_projects_comprehensive
-from achievements_extractor import extract_achievements_comprehensive
-from activities_extractor import extract_activities_comprehensive
-from publications_extractor import extract_publications_comprehensive
-from experience_extractor import extract_experiences_comprehensive
+from extractors.certification_extractor import extract_certifications_comprehensive
+from extractors.project_extractor import extract_projects_comprehensive
+from extractors.achievements_extractor import extract_achievements_comprehensive
+from extractors.activities_extractor import extract_activities_comprehensive
+from extractors.publications_extractor import extract_publications_comprehensive
+from extractors.experience_extractor import extract_experiences_comprehensive
 
 # ---------- Configuration ----------
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
