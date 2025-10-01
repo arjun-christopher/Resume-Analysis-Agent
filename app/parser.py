@@ -80,6 +80,7 @@ except ImportError:
     _HAS_TEXTSTAT = False
 
 from certification_extractor import extract_certifications_comprehensive
+from project_extractor import extract_projects_comprehensive
 
 # ---------- Configuration ----------
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
@@ -1998,7 +1999,8 @@ def extract_comprehensive_entities(text: str, hyperlinks_data: Optional[Dict] = 
     education = extract_education_info(text)
     readability = calculate_readability_stats(text)
     certifications = extract_certifications_comprehensive(text)
-    
+    projects = extract_projects_comprehensive(text)
+
     # Compile results
     entities = {
         "names": names,
@@ -2014,6 +2016,7 @@ def extract_comprehensive_entities(text: str, hyperlinks_data: Optional[Dict] = 
         "education": education,
         "readability_stats": readability,
         "certifications": certifications,
+        "projects": projects,
         "processing_info": {
             "text_length": len(text),
             "spacy_available": _NLP is not None,
