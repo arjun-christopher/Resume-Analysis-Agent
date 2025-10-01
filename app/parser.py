@@ -82,6 +82,7 @@ except ImportError:
 from certification_extractor import extract_certifications_comprehensive
 from project_extractor import extract_projects_comprehensive
 from achievements_extractor import extract_achievements_comprehensive
+from activities_extractor import extract_activities_comprehensive
 
 # ---------- Configuration ----------
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
@@ -1997,11 +1998,12 @@ def extract_comprehensive_entities(text: str, hyperlinks_data: Optional[Dict] = 
     
     # Additional extractions
     experience_years = extract_experience_years(text)
-    education = extract_education_info(text)
+    education = extract_education_comprehensive(text)
     readability = calculate_readability_stats(text)
     certifications = extract_certifications_comprehensive(text)
     projects = extract_projects_comprehensive(text)
     achievements = extract_achievements_comprehensive(text)
+    activities = extract_activities_comprehensive(text)
 
     # Compile results
     entities = {
@@ -2020,6 +2022,7 @@ def extract_comprehensive_entities(text: str, hyperlinks_data: Optional[Dict] = 
         "certifications": certifications,
         "projects": projects,
         "achievements": achievements,
+        "activities": activities,
         "processing_info": {
             "text_length": len(text),
             "spacy_available": _NLP is not None,
