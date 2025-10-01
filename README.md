@@ -1,154 +1,332 @@
-# RAG Resume Analysis System
+# Resume Analysis Agent
 
-AI-powered resume analysis using RAG with section-based chunking and hybrid search.
+An advanced AI-powered resume analysis system utilizing Retrieval-Augmented Generation (RAG) technology with intelligent document parsing, section-based chunking, and hybrid search capabilities. This system provides comprehensive resume analysis, entity extraction, and natural language querying functionality for HR professionals, recruiters, and talent acquisition teams.
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![LangChain](https://img.shields.io/badge/LangChain-1C3C3C?logo=langchain&logoColor=white)](https://langchain.com/)
 
-## Overview
+## System Architecture
 
-Resume analysis system using Retrieval-Augmented Generation for intelligent document parsing and natural language querying.
+```mermaid
+graph TB
+    subgraph "Input Layer"
+        A[PDF/DOCX Upload] --> B[Document Validator]
+    end
+    
+    subgraph "Processing Layer"
+        B --> C[Text Extractor<br/>PyMuPDF/python-docx]
+        C --> D[Section Detector]
+        D --> E[Entity Extractors]
+        E --> |Skills| E1[Skills Extractor]
+        E --> |Education| E2[Education Extractor]
+        E --> |Experience| E3[Experience Extractor]
+        E --> |Others| E4[7 More Extractors]
+    end
+    
+    subgraph "Chunking & Indexing"
+        E1 --> F[Section-based Chunker]
+        E2 --> F
+        E3 --> F
+        E4 --> F
+        F --> G[Vector Embeddings<br/>FastEmbed]
+        G --> H[FAISS Vector Store]
+        F --> I[BM25 Keyword Index]
+    end
+    
+    subgraph "Query Processing"
+        J[User Query] --> K[Query Analyzer]
+        K --> L[Hybrid Search Engine]
+        L --> H
+        L --> I
+        L --> M[Context Retrieval]
+    end
+    
+    subgraph "LLM Integration"
+        M --> N[LangChain Router]
+        N --> |Primary| O[Google Gemini]
+        N --> |Fallback| P[Ollama Local]
+        O --> Q[Response Generator]
+        P --> Q
+    end
+    
+    subgraph "Interface Layer"
+        Q --> R[Streamlit Web UI]
+        Q --> S[REST API]
+    end
+    
+    style A fill:#e1f5fe
+    style R fill:#e8f5e8
+    style H fill:#fff3e0
+    style O fill:#fce4ec
+```
 
-**Features:**
-- Variable-sized chunking respecting section boundaries
-- Hybrid search: FAISS semantic + BM25 keyword matching
-- Multi-LLM: Google Gemini primary, Ollama fallback
-- Entity extraction: names, contacts, skills, experience, education
-- Multi-format: PDF and DOCX support
+## Features
 
-## Installation
+- **Multi-format Processing**: PDF and DOCX support with advanced text extraction
+- **Intelligent Entity Extraction**: Skills, education, experience, certifications, projects, publications, achievements, activities
+- **Hybrid Search**: Combines FAISS semantic search with BM25 keyword matching
+- **Multi-LLM Support**: Google Gemini primary, Ollama fallback
+- **Real-time Analysis**: Fast processing and querying with sub-second response times
+- **Web Interface**: User-friendly Streamlit application
+
+## Complete Repository Structure
+
+```
+Resume-Analysis-Agent/
+├── app/                                    # Core application modules
+│   ├── extractors/                        # Specialized entity extractors
+│   │   ├── achievements_extractor.py      # Awards, honors, recognition extraction
+│   │   ├── activities_extractor.py        # Extracurricular activities, volunteer work
+│   │   ├── certification_extractor.py     # Professional certifications, licenses
+│   │   ├── education_extractor.py         # Educational background, degrees, institutions
+│   │   ├── experience_extractor.py        # Work experience, job titles, responsibilities
+│   │   ├── project_extractor.py           # Technical projects, portfolio work
+│   │   ├── publications_extractor.py      # Research publications, papers
+│   │   └── skills_extractor.py            # Technical & soft skills, competencies
+│   ├── parser.py                          # Main document parsing orchestrator
+│   ├── rag_engine.py                      # Advanced RAG with hybrid search
+│   ├── streamlit_app.py                   # Web interface application
+│   └── utils.py                           # Common utilities and helpers
+├── requirements.txt                       # Python dependencies specification
+├── setup.py                              # Automated installation & setup script
+├── .gitignore                            # Git ignore patterns
+├── LICENSE                               # MIT license file
+└── README.md                             # Project documentation
+```
+
+### Core Module Details
+
+**app/parser.py** - Central document processing engine
+- Text extraction from PDF/DOCX formats
+- Document structure analysis and section detection
+- Entity recognition coordination
+- Metadata extraction and preservation
+
+**app/rag_engine.py** - Advanced RAG implementation
+- Section-based intelligent chunking
+- Hybrid search combining semantic + keyword matching
+- Multi-LLM provider support with fallback mechanisms
+- Vector storage and retrieval optimization
+
+**app/streamlit_app.py** - Web interface
+- Document upload and validation
+- Real-time processing status updates
+- Interactive chat interface for querying
+- Processing history and analytics dashboard
+
+**app/utils.py** - System utilities
+- File handling and validation
+- Data preprocessing functions
+- Configuration management helpers
+- Logging and error handling utilities
+
+## Installation & Setup
+
+### Prerequisites
+
+- **Python 3.8+** (recommended: Python 3.10+)
+- **4GB+ RAM** (8GB recommended for optimal performance)
+- **Internet connection** for model downloads and API access
+- **Git** for repository cloning
+
+### Automated Installation (Recommended)
+
+The automated setup script handles all dependencies, environment configuration, and optional components:
 
 ```bash
-git clone https://github.com/arjun-christopher/RAG-Resume.git
-cd RAG-Resume
+git clone https://github.com/arjun-christopher/Resume-Analysis-Agent.git
+cd Resume-Analysis-Agent
 python setup.py
 ```
 
-**Manual Setup:**
+**Setup Script Features:**
+- Automatically installs Python dependencies from `requirements.txt`
+- Creates optimized `.env` configuration file
+- Sets up required directory structure (`data/uploads`, `data/index`, `data/advanced_rag`)
+- Optional Ollama installation for local LLM support
+- Validates system requirements and Python version
+- Downloads and configures embedding models
+- Provides interactive configuration prompts
+
+### Manual Installation
+
+For advanced users who prefer manual control:
+
 ```bash
+# Clone repository
+git clone https://github.com/arjun-christopher/Resume-Analysis-Agent.git
+cd Resume-Analysis-Agent
+
+# Install dependencies
 pip install -r requirements.txt
-cat > .env << EOF
-LLM_FALLBACK_ORDER=google,ollama
-ENABLE_GOOGLE=true
-GOOGLE_API_KEY=your_google_api_key_here
-GOOGLE_MODEL=gemini-pro
-ENABLE_OLLAMA=true
-OLLAMA_MODEL=qwen2.5:1.5b
-MAX_CHUNK_SIZE=1000
-MIN_CHUNK_SIZE=100
-SEMANTIC_WEIGHT=0.7
-BM25_WEIGHT=0.3
-EOF
+
+# Create data directories
 mkdir -p data/{uploads,index,advanced_rag}
-```
 
-## Usage
-
-**Web Interface:**
-```bash
-streamlit run app/streamlit_app.py
-```
-
-**Programmatic:**
-```python
-from app.rag_engine import create_advanced_rag_engine
-
-rag = create_advanced_rag_engine("data/index")
-result = rag.add_documents(["Resume content..."], [{"source": "resume.pdf"}])
-response = rag.query("Find Python developers with ML experience")
-print(response['answer'])
+# Setup environment (see Configuration section)
+cp .env.example .env  # Edit with your settings
 ```
 
 ## Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| GOOGLE_API_KEY | required | Get from https://makersuite.google.com/app/apikey |
-| LLM_FALLBACK_ORDER | google,ollama | LLM priority order |
-| MAX_CHUNK_SIZE | 1000 | Maximum chunk size |
-| SEMANTIC_WEIGHT | 0.7 | Semantic search weight |
-| BM25_WEIGHT | 0.3 | Keyword search weight |
+### Configuration Parameters Reference
 
-**Ollama Setup:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `GOOGLE_API_KEY` | *required* | Google AI Studio API key ([Get Here](https://makersuite.google.com/app/apikey)) |
+| `LLM_FALLBACK_ORDER` | `google,ollama` | Priority order for LLM providers |
+| `MAX_CHUNK_SIZE` | `1000` | Maximum characters per document chunk |
+| `SEMANTIC_WEIGHT` | `0.7` | Weight for semantic search (0.0-1.0) |
+| `BM25_WEIGHT` | `0.3` | Weight for keyword search (0.0-1.0) |
+| `EMBEDDING_BATCH_SIZE` | `32` | Batch size for embedding generation |
+| `MAX_FILE_SIZE_MB` | `50` | Maximum upload file size |
+| `SIMILARITY_THRESHOLD` | `0.75` | Minimum similarity score for results |
+
+### Setup Script Configuration
+
+The `setup.py` script provides interactive configuration:
+
+- **API Key Setup**: Guides through Google API key configuration
+- **LLM Provider Selection**: Choose between Google Gemini, Ollama, or both
+- **Performance Tuning**: Optimizes settings based on system resources
+- **Directory Structure**: Creates required folders with proper permissions
+- **Dependency Validation**: Checks and installs missing packages
+- **Model Downloads**: Downloads required embedding models
+
+## API Reference
+
+### Core Classes
+
+**AdvancedRAGEngine**
+```python
+class AdvancedRAGEngine:
+    def add_documents(self, documents: List[str], metadata: List[Dict] = None) -> Dict
+    def query(self, query: str, k: int = 5, semantic_weight: float = None) -> Dict
+    def get_stats(self) -> Dict
+    def clear_index(self) -> bool
+```
+
+**SectionBasedChunker**
+```python
+class SectionBasedChunker:
+    def chunk_document(self, document: str) -> List[Dict]
+    def get_section_boundaries(self, text: str) -> List[int]
+```
+
+### Response Format
+
+All query responses follow this standardized format:
+```python
+{
+    "answer": str,                    # Generated response
+    "sources": List[Dict],            # Source documents with metadata
+    "query": str,                     # Original query
+    "processing_time": float,         # Response time in seconds
+    "model_used": str,               # LLM model identifier
+    "confidence_score": float,       # Answer confidence (0.0-1.0)
+    "search_results": List[Dict],    # Raw search results
+    "chunk_count": int               # Number of chunks processed
+}
+```
+
+## Technology Stack
+
+### Core Technologies
+- **Python 3.8+**: Primary programming language with async support
+- **Streamlit 1.28+**: Web application framework with real-time updates
+- **LangChain 0.1+**: LLM integration and prompt management
+- **FAISS**: Facebook's vector similarity search engine
+- **FastEmbed**: High-performance embedding generation
+
+### Document Processing
+- **PyMuPDF (fitz)**: Advanced PDF parsing with layout preservation
+- **python-docx**: Microsoft Word document processing
+- **dateparser**: Intelligent date extraction and normalization
+- **phonenumbers**: International phone number validation
+- **email-validator**: Email address validation and normalization
+
+### Machine Learning & NLP
+- **sentence-transformers**: State-of-the-art embedding models
+- **transformers**: Hugging Face transformer models
+- **spaCy**: Industrial-strength NLP processing
+- **numpy & pandas**: Numerical computing and data manipulation
+- **scikit-learn**: Machine learning utilities
+
+### Search & Retrieval
+- **BM25Okapi**: Probabilistic keyword search ranking
+- **FAISS**: Efficient similarity search and clustering
+- **rank-bm25**: Python implementation of BM25 algorithm
+
+### LLM Providers
+- **Google Gemini**: Primary LLM with advanced reasoning
+- **Ollama**: Local LLM deployment for privacy
+- **OpenAI GPT**: Optional integration support
+- **Anthropic Claude**: Future integration planned
+
+## Troubleshooting
+
+### Common Issues
+
+**Import Errors**
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen2.5:1.5b
+# Fix: Ensure all dependencies are installed
+pip install -r requirements.txt --upgrade
+```
+
+**Google API Key Issues**
+```bash
+# Verify API key is valid and has proper permissions
+# Check quotas at https://console.cloud.google.com/
+```
+
+**Ollama Connection Problems**
+```bash
+# Start Ollama service
 ollama serve
+
+# Verify model is pulled
+ollama list
+ollama pull qwen2.5:1.5b
 ```
 
-## Architecture
+**Memory Issues**
+- Reduce `EMBEDDING_BATCH_SIZE` in `.env`
+- Increase system swap space
+- Process documents in smaller batches
 
-```
-Document → Section Detection → Variable Chunking → Embeddings → FAISS Index
-Query → Hybrid Search (Semantic + BM25) → LLM → Response
-```
+**Slow Performance**
+- Enable `CACHE_EMBEDDINGS=true`
+- Use SSD storage for vector indices
+- Optimize `CHUNK_SIZE` parameters
 
-**Tech Stack:** Streamlit, FastEmbed, FAISS, BM25Okapi, LangChain, Gemini, Ollama
+## Contributing
 
-## Features
+We welcome contributions! Please see our contributing guidelines:
 
-**Section-Based Chunking:** Preserves semantic boundaries instead of arbitrary splits
+1. **Fork the repository** and create your feature branch
+2. **Make your changes** with proper documentation
+3. **Add tests** for new functionality
+4. **Run the test suite** to ensure no regressions
+5. **Submit a pull request** with a clear description
 
-**Hybrid Search:** Combines dense semantic vectors with sparse keyword matching
+### Development Guidelines
 
-**Query-Adaptive Weighting:**
-- Keyword queries: 30% semantic, 70% BM25
-- Semantic queries: 80% semantic, 20% BM25
-- Balanced: 70% semantic, 30% BM25
-
-**Entity Extraction:** Multi-strategy name detection, social links, context-aware skills
-
-## API
-
-**AdvancedRAGEngine:**
-```python
-def __init__(self, storage_path: str = "data/advanced_rag")
-def add_documents(documents: List[str], metadata: List[Dict] = None) -> Dict
-def query(query: str, k: int = 5) -> Dict
-```
-
-**SectionBasedChunker:**
-```python
-def __init__(self, min_chunk_size: int = 100, max_chunk_size: int = 1000)
-def chunk_document(self, document: str) -> List[Dict]
-```
-
-**HybridSearchEngine:**
-```python
-def search(query: str, k: int = 5, semantic_weight: float = 0.7) -> List[Dict]
-```
-
-## Performance
-
-| Metric | Value |
-|--------|-------|
-| Search Speed | <50ms |
-| Embedding Speed | 100-500 docs/sec |
-| LLM Response | 1-3s |
-| Memory Usage | 500MB-2GB |
-
-## Project Structure
-
-```
-app/
-  ├── rag_engine.py          # Core RAG
-  ├── streamlit_app.py       # Web UI
-  ├── parser.py              # Document parsing
-  └── extractors/            # Entity extraction
-data/                        # Runtime (gitignored)
-requirements.txt             # Dependencies
-setup.py                     # Automated setup
-.env                         # Config (gitignored)
-```
+- Follow PEP 8 style guidelines
+- Add type hints for all functions
+- Write comprehensive docstrings
+- Include unit tests for new features
+- Update documentation as needed
 
 ## License
 
-MIT License - See LICENSE file
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Built With
+## Support
 
-LangChain, FAISS, FastEmbed, Streamlit, Google Gemini, Ollama
+For questions, issues, or feature requests:
 
-## Repository
-
-https://github.com/arjun-christopher/RAG-Resume
+- **GitHub Issues**: [Create an issue](https://github.com/arjun-christopher/Resume-Analysis-Agent/issues)
+- **Documentation**: Check this README and inline code documentation
+- **Community**: Join discussions in GitHub Discussions
