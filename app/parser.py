@@ -83,6 +83,8 @@ from certification_extractor import extract_certifications_comprehensive
 from project_extractor import extract_projects_comprehensive
 from achievements_extractor import extract_achievements_comprehensive
 from activities_extractor import extract_activities_comprehensive
+from publications_extractor import extract_publications_comprehensive
+from experience_extractor import extract_experiences_comprehensive
 
 # ---------- Configuration ----------
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
@@ -2004,6 +2006,8 @@ def extract_comprehensive_entities(text: str, hyperlinks_data: Optional[Dict] = 
     projects = extract_projects_comprehensive(text)
     achievements = extract_achievements_comprehensive(text)
     activities = extract_activities_comprehensive(text)
+    publications = extract_publications_comprehensive(text)
+    experiences = extract_experiences_comprehensive(text)
 
     # Compile results
     entities = {
@@ -2023,6 +2027,8 @@ def extract_comprehensive_entities(text: str, hyperlinks_data: Optional[Dict] = 
         "projects": projects,
         "achievements": achievements,
         "activities": activities,
+        "publications": publications,
+        "experiences": experiences,
         "processing_info": {
             "text_length": len(text),
             "spacy_available": _NLP is not None,
