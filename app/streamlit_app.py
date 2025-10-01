@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 import pandas as pd
 
 from utils import human_size, list_supported_files, clear_dir, safe_listdir
-from parsing import extract_docs_to_chunks_and_records
+from parser import extract_docs_to_chunks_and_records
 from rag_engine import create_advanced_rag_engine
 
 load_dotenv()
