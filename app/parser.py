@@ -79,6 +79,8 @@ try:
 except ImportError:
     _HAS_TEXTSTAT = False
 
+from certification_extractor import extract_certifications_comprehensive
+
 # ---------- Configuration ----------
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
 MAX_FILES_PER_SESSION = 50
@@ -754,7 +756,7 @@ def extract_comprehensive_skills(text: str) -> Dict[str, Any]:
     """
     # Detect different skill sections
     sections = detect_skills_sections(text)
-    
+
     comprehensive_skills = {
         'by_section': {},
         'all_skills': {
@@ -1995,6 +1997,7 @@ def extract_comprehensive_entities(text: str, hyperlinks_data: Optional[Dict] = 
     experience_years = extract_experience_years(text)
     education = extract_education_info(text)
     readability = calculate_readability_stats(text)
+    certifications = extract_certifications_comprehensive(text)
     
     # Compile results
     entities = {
@@ -2010,6 +2013,7 @@ def extract_comprehensive_entities(text: str, hyperlinks_data: Optional[Dict] = 
         "experience_years": experience_years,
         "education": education,
         "readability_stats": readability,
+        "certifications": certifications,
         "processing_info": {
             "text_length": len(text),
             "spacy_available": _NLP is not None,
