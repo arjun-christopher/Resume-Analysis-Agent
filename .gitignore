@@ -206,13 +206,18 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-#Data
+# Project Data - Resume Storage & Temporary Files
 data/
-data/index
-/data/uploads
-/data
+data/uploads/
+data/index/
+data/advanced_rag/
+data/cache/
+data/logs/
+*.pdf
+*.docx
+*.doc
 
-#VSCode
+# VSCode
 .vscode/settings.json
 .vscode/tasks.json
 .vscode/launch.json

@@ -1,33 +1,63 @@
-# Core Web Application
-streamlit
-python-dotenv
+# Web Application# Core Web Application
 
-# Document Processing
-python-docx
-Pillow
-pypdf
-PyMuPDF  # fitz for advanced PDF processing
+streamlit>=1.28.0streamlit
+
+python-dotenv>=1.0.0python-dotenv
+
+
+
+# Document Processing# Document Processing
+
+python-docx>=1.1.0python-docx
+
+PyMuPDF>=1.23.0Pillow
+
+dateparser>=1.2.0pypdf
+
+phonenumbers>=8.13.0PyMuPDF  # fitz for advanced PDF processing
+
 dateparser  # For date parsing and normalization
-phonenumbers  # For phone number validation and formatting
-rapidfuzz  # For fuzzy matching skills
-flashtext  # For fast keyword extraction
 
-# Fast Semantic RAG Core
+# RAG & Vector Searchphonenumbers  # For phone number validation and formatting
+
+fastembed>=0.2.0rapidfuzz  # For fuzzy matching skills
+
+sentence-transformers>=2.2.0flashtext  # For fast keyword extraction
+
+faiss-cpu>=1.7.4
+
+rank-bm25>=0.2.2# Fast Semantic RAG Core
+
 fastembed
-sentence-transformers
-faiss-cpu
-spacy
-rank-bm25  # For hybrid search (BM25 + semantic)
+
+# LangChain (Core + Google Gemini)sentence-transformers
+
+langchain>=0.1.0faiss-cpu
+
+langchain-core>=0.1.0spacy
+
+langchain-community>=0.0.20rank-bm25  # For hybrid search (BM25 + semantic)
+
+langchain-google-genai>=0.0.6
 
 # LangChain Framework
-langchain
-langchain-core
-langchain-community
+
+# NLP & MLlangchain
+
+numpy>=1.24.0langchain-core
+
+transformers>=4.35.0langchain-community
+
 langchain-openai
-langchain-google-genai
-langchain-groq
-langchain-huggingface
-langchain-anthropic
+
+# Data & Utilitieslangchain-google-genai
+
+pandas>=2.0.0langchain-groq
+
+tqdm>=4.66.0langchain-huggingface
+
+requests>=2.31.0langchain-anthropic
+
 
 # Machine Learning & NLP
 transformers
