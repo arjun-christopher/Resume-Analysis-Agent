@@ -10,7 +10,7 @@ import pandas as pd
 
 from utils import human_size, list_supported_files, clear_dir, safe_listdir
 from parsing import extract_docs_to_chunks_and_records
-from fast_semantic_rag import create_fast_semantic_rag
+from rag_engine import create_advanced_rag_engine
 
 load_dotenv()
 st.set_page_config(page_title="Resume Analysis Agent", layout="wide")
@@ -23,7 +23,7 @@ INDEX_DIR = DATA_DIR / "index"
 INDEX_DIR.mkdir(parents=True, exist_ok=True)
 
 if "agent" not in st.session_state:
-    st.session_state.agent = create_fast_semantic_rag(str(INDEX_DIR))
+    st.session_state.agent = create_advanced_rag_engine(str(INDEX_DIR))
 if "manifest" not in st.session_state:
     st.session_state.manifest = {}
 if "history" not in st.session_state:
@@ -79,7 +79,7 @@ with st.sidebar:
             del st.session_state[key]
         
         # Reinitialize essential state from scratch
-        st.session_state.agent = create_fast_semantic_rag(str(INDEX_DIR))
+        st.session_state.agent = create_advanced_rag_engine(str(INDEX_DIR))
         st.session_state.history = []
         st.session_state.manifest = {}
         

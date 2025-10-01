@@ -17,6 +17,7 @@ fastembed
 sentence-transformers
 faiss-cpu
 spacy
+rank-bm25  # For hybrid search (BM25 + semantic)
 
 # LangChain Framework
 langchain

@@ -145,10 +145,10 @@ streamlit run app/streamlit_app.py
 
 ### 4. Programmatic Usage
 ```python
-from app.fast_semantic_rag import create_fast_semantic_rag
+from app.rag_engine import create_advanced_rag_engine
 
 # Initialize system
-rag = create_fast_semantic_rag("data/index")
+rag = create_advanced_rag_engine("data/index")
 
 # Add documents
 documents = ["Resume content..."]
@@ -253,19 +253,11 @@ print(result['answer'])
 
 ### Basic Setup
 ```python
-from fast_semantic_rag import create_fast_semantic_rag, FastRAGConfig
+from rag_engine import create_advanced_rag_engine
 
-# Create optimized configuration
-config = FastRAGConfig(
-    chunk_size=256,
-    top_k=5,
-    enable_semantic_chunking=True,
-    enable_fast_eda=True,
-    enable_pattern_extraction=True
-)
-
-# Initialize system
-rag_system = create_fast_semantic_rag("data/rag_index", **config.__dict__)
+# Initialize the advanced RAG system with section-based chunking
+# and hybrid search (semantic + BM25)
+rag_system = create_advanced_rag_engine("data/rag_index")
 ```
 
 ### Adding Documents
@@ -286,11 +278,18 @@ print(f"Answer: {result['answer']}")
 print(f"Processing time: {result['processing_time']:.3f}s")
 ```
 
-### EDA Analysis
+### Advanced Features
 ```python
-# Perform corpus analysis
-eda_result = rag_system.perform_eda()
-print(eda_result['answer'])  # Semantic summary
+# The system automatically:
+# - Detects resume sections (Experience, Education, Skills, etc.)
+# - Creates variable-sized chunks based on section boundaries
+# - Uses hybrid search (semantic + BM25) for better retrieval
+# - Applies intelligent query routing based on question type
+
+# Get system statistics
+stats = rag_system.get_stats()
+print(f"Sections detected: {stats['sections_detected']}")
+print(f"Chunks created: {stats['chunks_created']}")
 ```
 
 ## Query Types Supported
@@ -335,17 +334,18 @@ class FastRAGConfig:
 
 ## Integration with Existing System
 
-The new FastSemanticRAG system is designed as a drop-in replacement for the existing advanced RAG engine:
+The RAG engine provides a clean, simple interface:
 
-### Backward Compatibility
+### Usage
 ```python
-# Old way
-from advanced_rag_engine import create_advanced_rag_system
-agent = create_advanced_rag_system(index_dir)
+from rag_engine import create_advanced_rag_engine
 
-# New way (same interface)
-from fast_semantic_rag import create_fast_semantic_rag
-agent = create_fast_semantic_rag(index_dir)
+# Create RAG system
+agent = create_advanced_rag_engine(index_dir)
+
+# Use the same interface as before
+agent.add_documents(documents, metadata)
+result = agent.query("Your question here")
 ```
 
 ### LLM Fallback Order
