@@ -282,7 +282,6 @@ def print_next_steps():
     
     print(f"{Colors.BOLD}Documentation:{Colors.ENDC}")
     print("   - README.md - Full documentation")
-    print("   - SETUP_LLM.md - LLM setup guide")
     print()
 
 

@@ -166,7 +166,7 @@ pip install -r requirements.txt
 mkdir -p data/{uploads,index,advanced_rag}
 
 # Setup environment (see Configuration section)
-cp .env.example .env  # Edit with your settings
+# The setup.py script creates a .env file automatically, or create one manually
 ```
 
 ## Configuration
