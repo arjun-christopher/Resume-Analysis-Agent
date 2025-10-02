@@ -74,7 +74,7 @@ except ImportError:
     _HAS_ANTHROPIC = False
 
 try:
-    from langchain_google_genai import ChatGoogleGenerativeAI
+    from google import genai
     _HAS_GOOGLE = True
 except ImportError:
     _HAS_GOOGLE = False
@@ -99,6 +99,45 @@ except ImportError:
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# Google GenAI Wrapper for LangChain Compatibility
+# ============================================================================
+class GoogleGenAIWrapper:
+    """Wrapper to make Google GenAI SDK compatible with LangChain interface"""
+    
+    def __init__(self, model: str, temperature: float = 0.1, max_output_tokens: int = 2048, api_key: str = None):
+        self.model = model
+        self.temperature = temperature
+        self.max_output_tokens = max_output_tokens
+        
+        # Initialize Google GenAI client
+        if api_key:
+            os.environ['GOOGLE_API_KEY'] = api_key
+        self.client = genai.Client()
+    
+    def invoke(self, prompt: str):
+        """Invoke the model with a prompt (LangChain-compatible interface)"""
+        try:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config={
+                    'temperature': self.temperature,
+                    'max_output_tokens': self.max_output_tokens,
+                }
+            )
+            
+            # Create a response object with 'content' attribute for compatibility
+            class Response:
+                def __init__(self, text):
+                    self.content = text
+                    self.text = text
+            
+            return Response(response.text)
+        except Exception as e:
+            logger.error(f"Google GenAI error: {e}")
+            raise
 
 
 # ============================================================================
@@ -927,9 +966,9 @@ class AdvancedRAGEngine:
         
         elif provider == 'google' and _HAS_GOOGLE:
             api_key = os.getenv('GOOGLE_API_KEY')
-            model = os.getenv('GOOGLE_MODEL', 'gemini-1.5-flash')
+            model = os.getenv('GOOGLE_MODEL', 'gemini-2.5-flash')
             if api_key and api_key != 'your_google_api_key_here':
-                return ChatGoogleGenerativeAI(model=model, temperature=temperature, max_output_tokens=max_tokens, timeout=timeout, google_api_key=api_key)
+                return GoogleGenAIWrapper(model=model, temperature=temperature, max_output_tokens=max_tokens, api_key=api_key)
         
         elif provider == 'groq' and _HAS_GROQ:
             api_key = os.getenv('GROQ_API_KEY')
