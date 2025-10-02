@@ -177,46 +177,5 @@ if prompt:
             
             # Display main response
             st.markdown(result["answer"])
-            
-            # Show processing stats
-            processing_time = result.get("processing_time", 0)
-            method = result.get("method", "unknown")
-            source_docs = result.get("source_documents", [])
-            
-            if source_docs:
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Documents Found", len(source_docs))
-                with col2:
-                    st.metric("Processing Time", f"{processing_time:.2f}s")
-                with col3:
-                    st.metric("Method", method.title())
-            
-            # Show source documents if available
-            if source_docs:
-                with st.expander("Source Documents", expanded=False):
-                    for i, doc in enumerate(source_docs[:5]):
-                        st.markdown(f"**Document {i+1}:**")
-                        # Handle both dict and object formats
-                        if isinstance(doc, dict):
-                            content = doc.get('content', '')
-                            metadata = doc.get('metadata', {})
-                            relevance_score = doc.get('relevance_score', 0.0)
-                        else:
-                            content = getattr(doc, 'page_content', '')
-                            metadata = getattr(doc, 'metadata', {})
-                            relevance_score = getattr(doc, 'relevance_score', 0.0)
-                        
-                        st.text(content[:500] + "..." if len(content) > 500 else content)
-                        if metadata:
-                            st.json(metadata)
-                        if relevance_score > 0:
-                            st.caption(f"Relevance Score: {relevance_score:.3f}")
-                        st.markdown("---")
-            
-            # Show system stats
-            with st.expander("System Information", expanded=False):
-                stats = st.session_state.agent.get_system_stats()
-                st.json(stats)
     
     st.session_state.history.append({"role":"assistant","text":result["answer"]})
