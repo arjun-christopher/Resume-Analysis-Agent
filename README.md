@@ -166,7 +166,7 @@ pip install -r requirements.txt
 mkdir -p data/{uploads,index,advanced_rag}
 
 # Setup environment (see Configuration section)
-cp .env.example .env  # Edit with your settings
+# The setup.py script creates a .env file automatically, or create one manually
 ```
 
 ## Configuration
@@ -245,14 +245,12 @@ All query responses follow this standardized format:
 - **python-docx**: Microsoft Word document processing
 - **dateparser**: Intelligent date extraction and normalization
 - **phonenumbers**: International phone number validation
-- **email-validator**: Email address validation and normalization
 
 ### Machine Learning & NLP
 - **sentence-transformers**: State-of-the-art embedding models
 - **transformers**: Hugging Face transformer models
-- **spaCy**: Industrial-strength NLP processing
+- **spaCy**: Industrial-strength NLP processing (optional)
 - **numpy & pandas**: Numerical computing and data manipulation
-- **scikit-learn**: Machine learning utilities
 
 ### Search & Retrieval
 - **BM25Okapi**: Probabilistic keyword search ranking
