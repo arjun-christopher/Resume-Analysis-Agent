@@ -133,6 +133,24 @@ OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_TIMEOUT=60
 
 # ============================================================================
+# OPENAI (Optional - Advanced Features)
+# ============================================================================
+# Get API key: https://platform.openai.com/api-keys
+# Uncomment to enable OpenAI
+#ENABLE_OPENAI=true
+#OPENAI_API_KEY=your_openai_api_key_here
+#OPENAI_MODEL=gpt-4o-mini
+
+# ============================================================================
+# ANTHROPIC CLAUDE (Optional - Advanced Features)
+# ============================================================================
+# Get API key: https://console.anthropic.com/
+# Uncomment to enable Claude
+#ENABLE_ANTHROPIC=true
+#ANTHROPIC_API_KEY=your_anthropic_api_key_here
+#ANTHROPIC_MODEL=claude-3-haiku-20240307
+
+# ============================================================================
 # RAG CONFIGURATION
 # ============================================================================
 # Section-based chunking parameters
