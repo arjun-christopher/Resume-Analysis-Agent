@@ -41,6 +41,13 @@ except ImportError:
     _HAS_FAISS = False
 
 try:
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import Distance, VectorParams, PointStruct
+    _HAS_QDRANT = True
+except ImportError:
+    _HAS_QDRANT = False
+
+try:
     from rank_bm25 import BM25Okapi
     _HAS_BM25 = True
 except ImportError:
@@ -452,10 +459,13 @@ class SectionBasedChunker:
 # ============================================================================
 
 class HybridSearchEngine:
-    """Combines dense (semantic) and sparse (BM25) retrieval"""
+    """Combines dense (semantic) and sparse (BM25) retrieval with persistent storage"""
     
-    def __init__(self, embedding_model: str = "BAAI/bge-small-en-v1.5"):
+    def __init__(self, embedding_model: str = "BAAI/bge-small-en-v1.5", storage_path: str = "data/index"):
         self.embedding_model_name = embedding_model
+        self.storage_path = Path(storage_path)
+        self.storage_path.mkdir(parents=True, exist_ok=True)
+        
         self.embedder = None
         self.embed_method = None
         self._init_embedder()
@@ -467,6 +477,29 @@ class HybridSearchEngine:
         self.faiss_index = None
         self.bm25 = None
         self.tokenized_corpus = []
+        
+        # Qdrant client for persistent storage
+        self.qdrant_client = None
+        self.collection_name = "resume_embeddings"
+        self._init_qdrant()
+        
+        # Load existing index if available
+        self._load_index()
+    
+    def _init_qdrant(self):
+        """Initialize Qdrant client for persistent vector storage"""
+        if not _HAS_QDRANT:
+            logger.warning("Qdrant not available, falling back to FAISS (no persistence)")
+            return
+        
+        try:
+            # Use local storage mode (no server required)
+            qdrant_path = str(self.storage_path / "qdrant_storage")
+            self.qdrant_client = QdrantClient(path=qdrant_path)
+            logger.info(f"✅ Initialized Qdrant at {qdrant_path}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize Qdrant: {e}")
+            self.qdrant_client = None
     
     def _init_embedder(self):
         """Initialize embedder with fallback options"""
@@ -529,7 +562,143 @@ class HybridSearchEngine:
         # Build BM25 index
         self._build_bm25_index()
         
+        # Save to Qdrant for persistence
+        self._save_to_qdrant(documents, new_embeddings, metadata)
+        
         logger.info(f"Added {len(documents)} documents. Total: {len(self.documents)}")
+    
+    def _save_to_qdrant(self, documents: List[str], embeddings: np.ndarray, metadata: List[Dict[str, Any]]):
+        """Save documents and embeddings to Qdrant for persistence"""
+        if not self.qdrant_client:
+            return
+        
+        try:
+            # Get embedding dimension
+            dimension = embeddings.shape[1]
+            
+            # Create collection if it doesn't exist
+            collections = self.qdrant_client.get_collections().collections
+            collection_exists = any(c.name == self.collection_name for c in collections)
+            
+            if not collection_exists:
+                self.qdrant_client.create_collection(
+                    collection_name=self.collection_name,
+                    vectors_config=VectorParams(size=dimension, distance=Distance.COSINE)
+                )
+                logger.info(f"Created Qdrant collection: {self.collection_name}")
+            
+            # Get current offset (number of existing points)
+            collection_info = self.qdrant_client.get_collection(self.collection_name)
+            offset = collection_info.points_count
+            
+            # Prepare points for upload
+            points = []
+            for i, (doc, emb, meta) in enumerate(zip(documents, embeddings, metadata)):
+                point = PointStruct(
+                    id=offset + i,
+                    vector=emb.tolist(),
+                    payload={
+                        "text": doc,
+                        "metadata": meta
+                    }
+                )
+                points.append(point)
+            
+            # Upload to Qdrant
+            self.qdrant_client.upsert(
+                collection_name=self.collection_name,
+                points=points
+            )
+            logger.info(f"Saved {len(points)} documents to Qdrant")
+        except Exception as e:
+            logger.warning(f"Failed to save to Qdrant: {e}")
+    
+    def _load_index(self):
+        """Load existing index from Qdrant"""
+        if not self.qdrant_client:
+            logger.info("No Qdrant client available, starting with empty index")
+            return
+        
+        try:
+            # Check if collection exists
+            collections = self.qdrant_client.get_collections().collections
+            collection_exists = any(c.name == self.collection_name for c in collections)
+            
+            if not collection_exists:
+                logger.info("No existing index found, starting fresh")
+                return
+            
+            # Get collection info
+            collection_info = self.qdrant_client.get_collection(self.collection_name)
+            total_points = collection_info.points_count
+            
+            if total_points == 0:
+                logger.info("Index exists but is empty")
+                return
+            
+            logger.info(f"Loading {total_points} documents from Qdrant...")
+            
+            # Retrieve all points (in batches if necessary)
+            batch_size = 1000
+            all_documents = []
+            all_metadata = []
+            all_embeddings = []
+            
+            offset = 0
+            while offset < total_points:
+                # Scroll through points
+                points, next_offset = self.qdrant_client.scroll(
+                    collection_name=self.collection_name,
+                    limit=batch_size,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=True
+                )
+                
+                for point in points:
+                    all_documents.append(point.payload["text"])
+                    all_metadata.append(point.payload["metadata"])
+                    all_embeddings.append(point.vector)
+                
+                if next_offset is None:
+                    break
+                offset = next_offset
+            
+            # Restore state
+            self.documents = all_documents
+            self.metadata = all_metadata
+            self.embeddings = np.array(all_embeddings, dtype=np.float32)
+            
+            # Rebuild FAISS and BM25 indices
+            self._build_faiss_index()
+            self._build_bm25_index()
+            
+            logger.info(f"✅ Loaded {len(self.documents)} documents from persistent storage")
+        except Exception as e:
+            logger.warning(f"Failed to load index: {e}")
+    
+    def has_documents(self) -> bool:
+        """Check if index has any documents"""
+        return len(self.documents) > 0
+    
+    def clear_index(self):
+        """Clear all documents and reset index"""
+        self.documents = []
+        self.metadata = []
+        self.embeddings = None
+        self.faiss_index = None
+        self.bm25 = None
+        self.tokenized_corpus = []
+        
+        # Clear Qdrant collection
+        if self.qdrant_client:
+            try:
+                collections = self.qdrant_client.get_collections().collections
+                if any(c.name == self.collection_name for c in collections):
+                    self.qdrant_client.delete_collection(self.collection_name)
+                    logger.info(f"Cleared Qdrant collection: {self.collection_name}")
+            except Exception as e:
+                logger.warning(f"Failed to clear Qdrant collection: {e}")
     
     def _build_faiss_index(self):
         """Build FAISS index for fast semantic search"""
@@ -693,7 +862,7 @@ class AdvancedRAGEngine:
         
         # Components
         self.chunker = SectionBasedChunker(max_chunk_size=1000, min_chunk_size=100)
-        self.search_engine = HybridSearchEngine()
+        self.search_engine = HybridSearchEngine(storage_path=str(self.storage_path))
         self.llm = self._init_llm()
         self.current_llm_provider = None
         
@@ -711,7 +880,7 @@ class AdvancedRAGEngine:
             logger.warning("LangChain not available")
             return None
         
-        # Prioritize Gemini, then Ollama for low-end systems
+        # Prioritize Gemini first, then Ollama for fallback
         fallback_order = os.getenv('LLM_FALLBACK_ORDER', 'google,ollama').split(',')
         temperature = float(os.getenv('LLM_TEMPERATURE', '0.1'))
         max_tokens = int(os.getenv('LLM_MAX_TOKENS', '2048'))
@@ -731,6 +900,9 @@ class AdvancedRAGEngine:
                     return llm
             except Exception as e:
                 logger.warning(f"Failed to initialize {provider}: {e}")
+                # If Gemini fails, try Ollama fallback immediately
+                if provider == 'google':
+                    logger.info("Gemini failed, trying Ollama fallback...")
         
         logger.error("All LLM providers failed")
         return None
@@ -936,7 +1108,7 @@ class AdvancedRAGEngine:
         return '\n'.join(insights) if insights else ""
     
     def _generate_response(self, question: str, context: str) -> str:
-        """Generate LLM response"""
+        """Generate LLM response with fallback retry"""
         if not self.llm:
             return ""
         
@@ -964,7 +1136,24 @@ ANSWER:"""
                 return response.text
             return str(response)
         except Exception as e:
-            logger.error(f"LLM generation failed: {e}")
+            logger.error(f"LLM generation failed with {self.current_llm_provider}: {e}")
+            
+            # Try fallback to Ollama if current provider is not Ollama
+            if self.current_llm_provider != 'ollama':
+                logger.info("Attempting fallback to Ollama...")
+                try:
+                    ollama_llm = self._init_provider_llm('ollama', 0.1, 2048, 60)
+                    if ollama_llm:
+                        response = ollama_llm.invoke(prompt)
+                        logger.info("✅ Ollama fallback successful")
+                        if hasattr(response, 'content'):
+                            return response.content
+                        elif hasattr(response, 'text'):
+                            return response.text
+                        return str(response)
+                except Exception as fallback_error:
+                    logger.error(f"Ollama fallback also failed: {fallback_error}")
+            
             return ""
     
     def _combine_responses(self, llm_response: str, pattern_insights: str, question: str) -> str:
@@ -993,12 +1182,28 @@ ANSWER:"""
         return {
             **self.stats,
             'total_documents': len(self.search_engine.documents),
-            'llm_provider': self.current_llm_provider
+            'llm_provider': self.current_llm_provider,
+            'has_index': self.has_index()
         }
     
     def get_system_stats(self) -> Dict[str, Any]:
         """Alias for get_stats() for backward compatibility"""
         return self.get_stats()
+    
+    def has_index(self) -> bool:
+        """Check if the engine has indexed documents"""
+        return self.search_engine.has_documents()
+    
+    def clear_index(self):
+        """Clear all indexed documents"""
+        self.search_engine.clear_index()
+        self.stats = {
+            'documents_processed': 0,
+            'chunks_created': 0,
+            'queries_processed': 0,
+            'sections_detected': 0
+        }
+        logger.info("Index cleared")
 
 
 # ============================================================================

@@ -28,6 +28,16 @@ if "manifest" not in st.session_state:
     st.session_state.manifest = {}
 if "history" not in st.session_state:
     st.session_state.history = []
+if "indexed_files" not in st.session_state:
+    st.session_state.indexed_files = set()
+
+# Check if index is already loaded at startup
+if st.session_state.agent.has_index() and not st.session_state.indexed_files:
+    # Index was loaded from disk, populate indexed_files from uploads directory
+    existing_files = list_supported_files(UPLOAD_DIR)
+    st.session_state.indexed_files = {f.name for f in existing_files}
+    if existing_files:
+        st.info(f"📂 Loaded existing index with {len(existing_files)} files from previous session")
 
 st.title("Resume Analysis Agent")
 
@@ -42,20 +52,30 @@ with st.sidebar:
     if uploaded:
         start = time.time()
         saved_files = []
+        new_files = []
+        
         for uf in uploaded:
             dest = UPLOAD_DIR / uf.name
             dest.write_bytes(uf.read())
             saved_files.append(dest)
+            
+            # Check if this file is new (not already indexed)
+            if uf.name not in st.session_state.indexed_files:
+                new_files.append(dest)
+                st.session_state.indexed_files.add(uf.name)
 
-        # Auto-index immediately — no button
-        with st.spinner(f"Indexing {len(saved_files)} file(s)..."):
-            chunks, metas, records = extract_docs_to_chunks_and_records(saved_files)
-            if chunks:
-                # Convert to the format expected by fast semantic RAG
-                documents = [chunk.page_content if hasattr(chunk, 'page_content') else str(chunk) for chunk in chunks]
-                metadata = [meta for meta in metas]
-                st.session_state.agent.add_documents(documents, metadata)
-        st.success(f"Uploaded & indexed {len(saved_files)} file(s) in {time.time()-start:.2f}s")
+        # Only index new files
+        if new_files:
+            with st.spinner(f"Indexing {len(new_files)} new file(s)..."):
+                chunks, metas, records = extract_docs_to_chunks_and_records(new_files)
+                if chunks:
+                    # Convert to the format expected by fast semantic RAG
+                    documents = [chunk.page_content if hasattr(chunk, 'page_content') else str(chunk) for chunk in chunks]
+                    metadata = [meta for meta in metas]
+                    st.session_state.agent.add_documents(documents, metadata)
+            st.success(f"Indexed {len(new_files)} new file(s) in {time.time()-start:.2f}s")
+        else:
+            st.info(f"All {len(saved_files)} file(s) already indexed, skipping re-indexing")
 
     st.markdown("---")
     files = list_supported_files(UPLOAD_DIR)
@@ -70,6 +90,10 @@ with st.sidebar:
 
     # Single-click Clear Session - resets everything immediately
     if st.button("Clear Session", use_container_width=True, type="primary"):
+        # Clear the agent's index
+        if hasattr(st.session_state, 'agent'):
+            st.session_state.agent.clear_index()
+        
         # Clear directories completely
         clear_dir(UPLOAD_DIR)
         clear_dir(INDEX_DIR)
@@ -82,6 +106,7 @@ with st.sidebar:
         st.session_state.agent = create_advanced_rag_engine(str(INDEX_DIR))
         st.session_state.history = []
         st.session_state.manifest = {}
+        st.session_state.indexed_files = set()
         
         # Force complete UI refresh
         st.rerun()
