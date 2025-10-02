@@ -120,7 +120,7 @@ LLM_TIMEOUT=30
 # Get your free API key: https://makersuite.google.com/app/apikey
 ENABLE_GOOGLE=true
 GOOGLE_API_KEY=your_google_api_key_here
-GOOGLE_MODEL=gemini-pro
+GOOGLE_MODEL=gemini-1.5-flash
 
 # ============================================================================
 # OLLAMA (Fallback - Local/Low-end Systems)

@@ -927,7 +927,7 @@ class AdvancedRAGEngine:
         
         elif provider == 'google' and _HAS_GOOGLE:
             api_key = os.getenv('GOOGLE_API_KEY')
-            model = os.getenv('GOOGLE_MODEL', 'gemini-pro')
+            model = os.getenv('GOOGLE_MODEL', 'gemini-1.5-flash')
             if api_key and api_key != 'your_google_api_key_here':
                 return ChatGoogleGenerativeAI(model=model, temperature=temperature, max_output_tokens=max_tokens, timeout=timeout, google_api_key=api_key)
         
