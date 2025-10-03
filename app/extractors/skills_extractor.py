@@ -275,14 +275,23 @@ PROGRAMMING_LANGUAGE_ALIASES = {
 # Initialize FlashText processor if available
 if _HAS_FLASHTEXT:
     _KEYWORD_PROCESSOR = KeywordProcessor(case_sensitive=False)
-    for skill in ALL_SKILLS:
-        _KEYWORD_PROCESSOR.add_keyword(skill)
+    # Add all skills from database with category information
+    for category, skills in SKILLS_DATABASE.items():
+        for skill in skills:
+            _KEYWORD_PROCESSOR.add_keyword(skill, (skill.lower(), category))
     
-    # Add programming language aliases
+    # Add programming language aliases with their categories
     for main_lang, aliases in PROGRAMMING_LANGUAGE_ALIASES.items():
-        if main_lang in ALL_SKILLS:
+        # Find the category for this programming language
+        lang_category = None
+        for category, skills in SKILLS_DATABASE.items():
+            if main_lang in skills:
+                lang_category = category
+                break
+        
+        if lang_category:
             for alias in aliases:
-                _KEYWORD_PROCESSOR.add_keyword(alias, main_lang)
+                _KEYWORD_PROCESSOR.add_keyword(alias, (main_lang.lower(), lang_category))
 else:
     _KEYWORD_PROCESSOR = None
 
@@ -355,7 +364,14 @@ def extract_skills_from_text(text: str, section_type: str = 'general') -> Dict[s
     # Method 1: FlashText keyword extraction (fastest)
     if _KEYWORD_PROCESSOR:
         found_keywords = _KEYWORD_PROCESSOR.extract_keywords(text, span_info=True)
-        for keyword, start, end in found_keywords:
+        for keyword_data, start, end in found_keywords:
+            # Extract skill name from tuple (skill, category) if needed
+            if isinstance(keyword_data, tuple) and len(keyword_data) == 2:
+                keyword, category = keyword_data
+            else:
+                keyword = keyword_data
+                category = 'other'
+            
             # Get surrounding context for level detection
             context_start = max(0, start - 50)
             context_end = min(len(text), end + 50)
@@ -478,6 +494,13 @@ def extract_skills_from_patterns(text: str, section_type: str) -> List[tuple]:
 
 def detect_skill_level(context: str, skill: str) -> str:
     """Detect skill level from context"""
+    # Handle tuple skills (shouldn't happen but defensive)
+    if isinstance(skill, tuple):
+        skill = skill[0] if len(skill) > 0 else str(skill)
+    
+    # Ensure skill is a string
+    skill = str(skill)
+    
     context_lower = context.lower()
     
     for level, pattern in SKILL_LEVEL_PATTERNS.items():
@@ -521,6 +544,13 @@ def extract_level_from_text(text: str) -> str:
 
 def calculate_skill_confidence(text: str, skill: str, context: str) -> float:
     """Calculate confidence score for skill extraction"""
+    # Handle tuple skills (shouldn't happen but defensive)
+    if isinstance(skill, tuple):
+        skill = skill[0] if len(skill) > 0 else str(skill)
+    
+    # Ensure skill is a string
+    skill = str(skill)
+    
     confidence = 0.5
     
     # Higher confidence if in skills section
@@ -685,8 +715,13 @@ def extract_skills_flashtext(text: str) -> Dict[str, List[Tuple[str, str]]]:
     # Organize by category
     skills_by_category = defaultdict(list)
     for skill_data in found_keywords:
-        skill_name, category = skill_data
-        skills_by_category[category].append(skill_name)
+        # Handle both tuple and string returns for robustness
+        if isinstance(skill_data, tuple) and len(skill_data) == 2:
+            skill_name, category = skill_data
+            skills_by_category[category].append(skill_name)
+        elif isinstance(skill_data, str):
+            # Fallback: if just a string, add to 'other' category
+            skills_by_category['other'].append(skill_data)
     
     return dict(skills_by_category)
 

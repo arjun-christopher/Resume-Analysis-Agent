@@ -377,7 +377,9 @@ def extract_pdf_with_pymupdf(file_path: Path) -> Tuple[str, List[str], Dict[str,
         return full_text_str, urls, metadata
         
     except Exception as e:
+        import traceback
         print(f"Error extracting PDF {file_path}: {e}")
+        print(f"Traceback: {traceback.format_exc()}")
         return "", [], {}
 
 def extract_docx_content(file_path: Path) -> Tuple[str, List[str]]:

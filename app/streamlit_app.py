@@ -227,7 +227,7 @@ if prompt:
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Analyzing resumes with advanced RAG..."):
+        with st.spinner("Analyzing resume(s)..."):
             # Use advanced RAG system
             result = st.session_state.agent.query(prompt)
             
