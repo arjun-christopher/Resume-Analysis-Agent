@@ -12,7 +12,7 @@ and profile sections from resumes. It extracts key information about the candida
 """
 
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 # Try to import spaCy for NLP-based extraction
 try:
