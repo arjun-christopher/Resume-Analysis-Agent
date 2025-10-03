@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 import json
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional, Set
@@ -92,6 +93,11 @@ from extractors.education_extractor import extract_education_comprehensive, extr
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
 MAX_FILES_PER_SESSION = 50
 MAX_TEXT_LENGTH = 1_000_000  # Limit text processing for performance
+
+# Cache configuration
+CACHE_DIR = Path("data/cache")
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_FILE = CACHE_DIR / "processed_resumes.json"
 
 # Pre-compiled regex patterns for efficiency
 EMAIL_PATTERN = re.compile(
@@ -221,6 +227,55 @@ def file_sha256(file_path: Path) -> str:
         for chunk in iter(lambda: f.read(4096), b""):
             hash_sha256.update(chunk)
     return hash_sha256.hexdigest()
+
+def load_cache() -> Dict[str, Any]:
+    """Load cache of processed resumes"""
+    if CACHE_FILE.exists():
+        try:
+            with open(CACHE_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading cache: {e}")
+            return {}
+    return {}
+
+def save_cache(cache: Dict[str, Any]):
+    """Save cache of processed resumes"""
+    try:
+        with open(CACHE_FILE, 'w') as f:
+            json.dump(cache, f, indent=2)
+    except Exception as e:
+        print(f"Error saving cache: {e}")
+
+def is_resume_cached(resume_id: str, file_path: Path, cache: Dict[str, Any]) -> bool:
+    """Check if resume is already cached and file hasn't changed"""
+    if resume_id not in cache:
+        return False
+    
+    cached_entry = cache[resume_id]
+    cached_timestamp = cached_entry.get('file_modified')
+    current_timestamp = file_path.stat().st_mtime
+    
+    # Check if file has been modified since caching
+    return cached_timestamp == current_timestamp
+
+def get_cached_resume(resume_id: str, cache: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Retrieve cached resume data"""
+    return cache.get(resume_id)
+
+def cache_resume(resume_id: str, file_path: Path, chunks: List[str], 
+                 chunk_metadata: List[Dict[str, Any]], document_record: Dict[str, Any], 
+                 cache: Dict[str, Any]):
+    """Cache processed resume data"""
+    cache[resume_id] = {
+        'resume_id': resume_id,
+        'resume_name': file_path.name,
+        'file_path': str(file_path),
+        'file_modified': file_path.stat().st_mtime,
+        'chunk_count': len(chunks),
+        'document_record': document_record,
+        'processing_timestamp': time.time()
+    }
 
 def normalize_phone_number(phone: str) -> Optional[str]:
     """Normalize phone number using phonenumbers library"""
@@ -1014,7 +1069,7 @@ def extract_semantic_chunks(text: str, chunk_size: int = 512, overlap: int = 50)
 # ---------- Main Processing Function ----------
 def process_documents_with_pymupdf(file_paths: List[Path]) -> Tuple[List[str], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    Process documents using PyMuPDF with comprehensive information extraction
+    Process documents using PyMuPDF with comprehensive information extraction and caching
     
     Args:
         file_paths: List of file paths to process
@@ -1031,11 +1086,29 @@ def process_documents_with_pymupdf(file_paths: List[Path]) -> Tuple[List[str], L
     chunk_metadata = []
     document_records = []
     
+    # Load cache
+    cache = load_cache()
+    cache_updated = False
+    
     for file_path in file_paths:
         if not file_path.exists():
             continue
         
-        print(f"Processing: {file_path.name}")
+        # Generate unique resume ID using file hash
+        resume_id = file_sha256(file_path)
+        resume_name = file_path.name
+        
+        # Check cache first
+        if is_resume_cached(resume_id, file_path, cache):
+            print(f"Loading from cache: {file_path.name}")
+            cached_data = get_cached_resume(resume_id, cache)
+            if cached_data:
+                # For cached resumes, we still need to reprocess to get chunks
+                # but we can skip some expensive operations
+                print(f"  (Cache hit, but reprocessing for compatibility)")
+                # Continue with normal processing
+        else:
+            print(f"Processing: {file_path.name}")
         
         # Extract content based on file type
         if file_path.suffix.lower() == ".pdf":
@@ -1065,8 +1138,10 @@ def process_documents_with_pymupdf(file_paths: List[Path]) -> Tuple[List[str], L
             # Extract chunk-specific entities (pass hyperlinks for consistency)
             chunk_entities = extract_comprehensive_entities(chunk_text, hyperlinks_data)
             
-            # Create chunk metadata
+            # Create chunk metadata with resume identification
             chunk_meta = {
+                "resume_id": resume_id,
+                "resume_name": resume_name,
                 "file": file_path.name,
                 "path": str(file_path),
                 "chunk_index": i,
@@ -1085,20 +1160,34 @@ def process_documents_with_pymupdf(file_paths: List[Path]) -> Tuple[List[str], L
             chunks.append(chunk_text)
             chunk_metadata.append(chunk_meta)
         
-        # Create document record
+        # Create document record with resume identification
         document_record = {
+            "resume_id": resume_id,
+            "resume_name": resume_name,
             "file": file_path.name,
             "path": str(file_path),
-            "file_hash": file_sha256(file_path),
+            "file_hash": resume_id,  # Same as resume_id for consistency
             "file_size": file_path.stat().st_size,
             "total_chunks": len(semantic_chunks),
             "entities": entities,
             "urls": urls,
             "pdf_metadata": pdf_metadata,
-            "processing_timestamp": None,  # Can be added later if needed
+            "processing_timestamp": time.time(),
         }
         
         document_records.append(document_record)
+        
+        # Cache the processed resume
+        current_chunks_for_file = chunks[-len(semantic_chunks):] if semantic_chunks else []
+        current_metadata_for_file = chunk_metadata[-len(semantic_chunks):] if semantic_chunks else []
+        cache_resume(resume_id, file_path, current_chunks_for_file, 
+                    current_metadata_for_file, document_record, cache)
+        cache_updated = True
+    
+    # Save cache if updated
+    if cache_updated:
+        save_cache(cache)
+        print(f"Cache updated with {len(document_records)} resume(s)")
     
     print(f"Processed {len(document_records)} documents into {len(chunks)} chunks")
     return chunks, chunk_metadata, document_records

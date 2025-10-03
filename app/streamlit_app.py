@@ -30,6 +30,8 @@ if "history" not in st.session_state:
     st.session_state.history = []
 if "indexed_files" not in st.session_state:
     st.session_state.indexed_files = set()
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
 
 # Check if index is already loaded at startup
 if st.session_state.agent.has_index() and not st.session_state.indexed_files:
@@ -46,7 +48,8 @@ with st.sidebar:
     st.header("Upload Resumes")
     uploaded = st.file_uploader(
         "Drop PDF or Word files here", type=["pdf","doc","docx"], accept_multiple_files=True,
-        help="Only PDFs and Word documents are supported"
+        help="Only PDFs and Word documents are supported",
+        key=f"file_uploader_{st.session_state.uploader_key}"
     )
 
     if uploaded:
@@ -81,6 +84,20 @@ with st.sidebar:
     files = list_supported_files(UPLOAD_DIR)
     sizes = sum(p.stat().st_size for p in files)
     st.caption(f"Session: {len(files)} files • {human_size(sizes)}")
+    
+    # Show indexed resumes with their details
+    if st.session_state.agent.has_index():
+        resume_list = st.session_state.agent.get_resume_list()
+        if resume_list:
+            st.markdown("### 📋 Indexed Resumes")
+            st.caption(f"{len(resume_list)} unique resumes indexed")
+            
+            with st.expander("View Resume List", expanded=False):
+                for idx, resume_info in enumerate(resume_list[:20], 1):
+                    st.write(f"{idx}. {resume_info['resume_name']}")
+                if len(resume_list) > 20:
+                    st.caption(f"...and {len(resume_list)-20} more")
+    
     if files:
         with st.expander("Files", expanded=False):
             for p in files[:20]:
@@ -98,9 +115,14 @@ with st.sidebar:
         clear_dir(UPLOAD_DIR)
         clear_dir(INDEX_DIR)
         
-        # Clear ALL session state variables
+        # Increment uploader key to reset the file uploader widget
+        st.session_state.uploader_key += 1
+        
+        # Clear ALL session state variables except uploader_key
+        keys_to_keep = ['uploader_key']
         for key in list(st.session_state.keys()):
-            del st.session_state[key]
+            if key not in keys_to_keep:
+                del st.session_state[key]
         
         # Reinitialize essential state from scratch
         st.session_state.agent = create_advanced_rag_engine(str(INDEX_DIR))
@@ -177,5 +199,33 @@ if prompt:
             
             # Display main response
             st.markdown(result["answer"])
+            
+            # Show additional metadata if multi-resume query
+            if result.get('grouped_by_resume'):
+                resume_count = result.get('resume_count', 0)
+                st.info(f"ℹ️ Analysis covers **{resume_count} resumes**")
+            
+            # Show source information in expandable section
+            if result.get('source_documents'):
+                with st.expander("📚 Source Information", expanded=False):
+                    # Group sources by resume
+                    sources_by_resume = {}
+                    for doc in result['source_documents'][:10]:  # Limit to top 10
+                        resume_name = doc.metadata.get('resume_name', 'Unknown')
+                        if resume_name not in sources_by_resume:
+                            sources_by_resume[resume_name] = []
+                        sources_by_resume[resume_name].append({
+                            'section': doc.metadata.get('section_type', 'unknown'),
+                            'score': doc.metadata.get('relevance_score', 0),
+                            'text': doc.page_content[:200] + '...' if len(doc.page_content) > 200 else doc.page_content
+                        })
+                    
+                    # Display grouped sources
+                    for resume_name, sources in sources_by_resume.items():
+                        st.markdown(f"**📄 {resume_name}**")
+                        for source in sources:
+                            st.markdown(f"- *[{source['section']}]* (score: {source['score']:.3f})")
+                            st.caption(f"  {source['text']}")
+                        st.markdown("---")
     
     st.session_state.history.append({"role":"assistant","text":result["answer"]})

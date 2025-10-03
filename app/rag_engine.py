@@ -17,6 +17,8 @@ from collections import defaultdict, Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 import numpy as np
 from tqdm import tqdm
@@ -771,16 +773,20 @@ class HybridSearchEngine:
         query: str, 
         k: int = 10, 
         semantic_weight: float = 0.7,
-        bm25_weight: float = 0.3
+        bm25_weight: float = 0.3,
+        resume_id: Optional[str] = None,
+        resume_name: Optional[str] = None
     ) -> List[Tuple[str, Dict[str, Any], float]]:
         """
-        Hybrid search combining semantic and BM25
+        Hybrid search combining semantic and BM25 with optional resume filtering
         
         Args:
             query: Search query
             k: Number of results
             semantic_weight: Weight for semantic search (0-1)
             bm25_weight: Weight for BM25 search (0-1)
+            resume_id: Optional resume ID to filter results (for per-resume queries)
+            resume_name: Optional resume name to filter results (alternative to resume_id)
         """
         if not self.documents:
             return []
@@ -799,8 +805,43 @@ class HybridSearchEngine:
         # Fuse results using reciprocal rank fusion
         fused_results = self._fuse_results(semantic_results, bm25_results, semantic_weight, bm25_weight)
         
+        # Filter by resume if specified
+        if resume_id or resume_name:
+            filtered_results = []
+            for text, metadata, score in fused_results:
+                if resume_id and metadata.get('resume_id') == resume_id:
+                    filtered_results.append((text, metadata, score))
+                elif resume_name and metadata.get('resume_name') == resume_name:
+                    filtered_results.append((text, metadata, score))
+            fused_results = filtered_results
+        
         # Return top k
         return fused_results[:k]
+    
+    def group_results_by_resume(
+        self, 
+        results: List[Tuple[str, Dict[str, Any], float]]
+    ) -> Dict[str, List[Tuple[str, Dict[str, Any], float]]]:
+        """
+        Group search results by resume_id for multi-resume queries
+        
+        Args:
+            results: List of search results
+            
+        Returns:
+            Dictionary mapping resume_id to list of results for that resume
+        """
+        grouped = defaultdict(list)
+        
+        for text, metadata, score in results:
+            resume_id = metadata.get('resume_id', 'unknown')
+            resume_name = metadata.get('resume_name', 'Unknown Resume')
+            
+            # Store resume name in the group key for easy access
+            group_key = f"{resume_id}|{resume_name}"
+            grouped[group_key].append((text, metadata, score))
+        
+        return dict(grouped)
     
     def _semantic_search(self, query: str, k: int) -> List[Tuple[int, float]]:
         """Semantic search using FAISS"""
@@ -992,7 +1033,7 @@ class AdvancedRAGEngine:
         return None
     
     def add_documents(self, documents: List[str], metadata: List[Dict[str, Any]] = None):
-        """Add documents with section-based chunking"""
+        """Add documents with section-based chunking and parallel processing"""
         start_time = time.time()
         
         if metadata is None:
@@ -1002,17 +1043,42 @@ class AdvancedRAGEngine:
         all_metadata = []
         total_sections = 0
         
-        for doc, meta in zip(documents, metadata):
-            # Create section-based chunks
-            chunks_data = self.chunker.chunk_document(doc, meta)
+        # Use parallel processing for batch document ingestion
+        if len(documents) > 1:
+            logger.info(f"Processing {len(documents)} documents in parallel...")
             
-            for chunk_data in chunks_data:
-                all_chunks.append(chunk_data['text'])
-                all_metadata.append(chunk_data['metadata'])
+            def process_document(doc_meta_pair):
+                """Process a single document (for parallel execution)"""
+                doc, meta = doc_meta_pair
+                chunks_data = self.chunker.chunk_document(doc, meta)
+                sections = self.chunker.section_detector.detect_sections(doc)
+                return chunks_data, len(sections)
             
-            # Count sections
-            sections = self.chunker.section_detector.detect_sections(doc)
-            total_sections += len(sections)
+            # Process documents in parallel with ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(len(documents), os.cpu_count() or 4)) as executor:
+                futures = {executor.submit(process_document, (doc, meta)): (doc, meta) 
+                          for doc, meta in zip(documents, metadata)}
+                
+                for future in as_completed(futures):
+                    try:
+                        chunks_data, section_count = future.result()
+                        for chunk_data in chunks_data:
+                            all_chunks.append(chunk_data['text'])
+                            all_metadata.append(chunk_data['metadata'])
+                        total_sections += section_count
+                    except Exception as e:
+                        logger.error(f"Error processing document: {e}")
+        else:
+            # Single document - no need for parallel processing
+            for doc, meta in zip(documents, metadata):
+                chunks_data = self.chunker.chunk_document(doc, meta)
+                
+                for chunk_data in chunks_data:
+                    all_chunks.append(chunk_data['text'])
+                    all_metadata.append(chunk_data['metadata'])
+                
+                sections = self.chunker.section_detector.detect_sections(doc)
+                total_sections += len(sections)
         
         # Add to search engine
         if all_chunks:
@@ -1033,20 +1099,38 @@ class AdvancedRAGEngine:
             'processing_time': processing_time
         }
     
-    def query(self, question: str, k: int = 5) -> Dict[str, Any]:
-        """Query with advanced RAG"""
+    def query(self, question: str, k: int = 5, resume_id: Optional[str] = None, 
+              resume_name: Optional[str] = None, group_by_resume: bool = True) -> Dict[str, Any]:
+        """
+        Query with advanced RAG and optional resume filtering/grouping
+        
+        Args:
+            question: User query
+            k: Number of results to retrieve
+            resume_id: Optional resume ID to filter results (for per-resume queries)
+            resume_name: Optional resume name to filter results
+            group_by_resume: Whether to group results by resume in the response
+        """
         start_time = time.time()
         
         try:
             # Adjust weights based on query type
             semantic_weight, bm25_weight = self._determine_search_weights(question)
             
-            # Hybrid search
+            # Detect if query is asking for comparison/ranking across resumes
+            is_comparison_query = self._is_comparison_query(question)
+            
+            # For comparison queries, get more results to ensure we cover multiple resumes
+            search_k = k * 3 if is_comparison_query else k
+            
+            # Hybrid search with optional filtering
             results = self.search_engine.search(
                 question, 
-                k=k, 
+                k=search_k, 
                 semantic_weight=semantic_weight,
-                bm25_weight=bm25_weight
+                bm25_weight=bm25_weight,
+                resume_id=resume_id,
+                resume_name=resume_name
             )
             
             if not results:
@@ -1056,13 +1140,18 @@ class AdvancedRAGEngine:
                     'processing_time': time.time() - start_time
                 }
             
-            # Extract pattern insights
-            pattern_insights = self._extract_insights(question, results)
+            # Group results by resume if requested or if comparison query
+            grouped_results = None
+            if group_by_resume or is_comparison_query:
+                grouped_results = self.search_engine.group_results_by_resume(results)
             
-            # Generate LLM response
+            # Extract pattern insights (with grouping info if available)
+            pattern_insights = self._extract_insights(question, results, grouped_results)
+            
+            # Generate LLM response with grouping context if available
             llm_response = ""
             if self.llm:
-                context = '\n\n'.join([f"[{meta.get('section_type', 'unknown')}] {text}" for text, meta, _ in results])
+                context = self._build_context_for_llm(results, grouped_results, is_comparison_query)
                 llm_response = self._generate_response(question, context)
             
             # Combine responses
@@ -1078,13 +1167,20 @@ class AdvancedRAGEngine:
             
             self.stats['queries_processed'] += 1
             
-            return {
+            response = {
                 'answer': final_answer,
                 'source_documents': source_docs,
                 'processing_time': time.time() - start_time,
                 'method': 'advanced_hybrid_rag',
                 'search_weights': {'semantic': semantic_weight, 'bm25': bm25_weight}
             }
+            
+            # Add grouping info if available
+            if grouped_results:
+                response['grouped_by_resume'] = True
+                response['resume_count'] = len(grouped_results)
+            
+            return response
         
         except Exception as e:
             logger.error(f"Query error: {e}")
@@ -1093,6 +1189,54 @@ class AdvancedRAGEngine:
                 'source_documents': [],
                 'processing_time': time.time() - start_time
             }
+    
+    def _is_comparison_query(self, question: str) -> bool:
+        """Detect if query is asking for comparison across multiple resumes"""
+        question_lower = question.lower()
+        comparison_keywords = [
+            'compare', 'rank', 'best', 'top', 'most', 'who has', 'which candidate',
+            'all candidates', 'everyone', 'across', 'between', 'versus', 'vs',
+            'find candidates', 'list candidates', 'show all', 'all resumes'
+        ]
+        return any(keyword in question_lower for keyword in comparison_keywords)
+    
+    def _build_context_for_llm(
+        self, 
+        results: List[Tuple[str, Dict, float]], 
+        grouped_results: Optional[Dict[str, List[Tuple[str, Dict, float]]]] = None,
+        is_comparison: bool = False
+    ) -> str:
+        """Build context string for LLM with optional grouping"""
+        if grouped_results and is_comparison:
+            # Group context by resume for comparison queries
+            context_parts = []
+            for group_key, group_results in grouped_results.items():
+                resume_id, resume_name = group_key.split('|', 1)
+                context_parts.append(f"\n### 📄 {resume_name}\n")
+                for text, meta, score in group_results[:3]:  # Limit per resume
+                    section_type = meta.get('section_type', 'unknown')
+                    context_parts.append(f"[{section_type}] {text}\n")
+            return '\n'.join(context_parts)
+        else:
+            # Standard context format
+            return '\n\n'.join([
+                f"[{meta.get('section_type', 'unknown')}] {text}" 
+                for text, meta, _ in results
+            ])
+    
+    def get_resume_list(self) -> List[Dict[str, str]]:
+        """Get list of all indexed resumes with their IDs and names"""
+        resume_map = {}
+        for metadata in self.search_engine.metadata:
+            resume_id = metadata.get('resume_id')
+            resume_name = metadata.get('resume_name')
+            if resume_id and resume_id not in resume_map:
+                resume_map[resume_id] = resume_name
+        
+        return [
+            {'resume_id': rid, 'resume_name': rname} 
+            for rid, rname in resume_map.items()
+        ]
     
     def _determine_search_weights(self, question: str) -> Tuple[float, float]:
         """Determine optimal search weights based on question type"""
@@ -1111,10 +1255,20 @@ class AdvancedRAGEngine:
         # Balanced default
         return 0.7, 0.3
     
-    def _extract_insights(self, question: str, results: List[Tuple[str, Dict, float]]) -> str:
-        """Extract structured insights from results"""
+    def _extract_insights(
+        self, 
+        question: str, 
+        results: List[Tuple[str, Dict, float]], 
+        grouped_results: Optional[Dict[str, List[Tuple[str, Dict, float]]]] = None
+    ) -> str:
+        """Extract structured insights from results with optional grouping"""
         question_lower = question.lower()
         insights = []
+        
+        # If grouped results available, show resume breakdown
+        if grouped_results:
+            resume_names = [key.split('|', 1)[1] for key in grouped_results.keys()]
+            insights.append(f"**📋 Resumes Analyzed:** {len(grouped_results)} ({', '.join(resume_names[:5])}{' and more...' if len(resume_names) > 5 else ''})")
         
         # Aggregate data by section type
         section_data = defaultdict(list)
@@ -1201,18 +1355,18 @@ ANSWER:"""
             return "Unable to generate response."
         
         if not llm_response:
-            return f"## 📊 Analysis\n\n{pattern_insights}"
+            return f"## Analysis\n\n{pattern_insights}"
         
         if not pattern_insights:
-            return f"## 🤖 Answer\n\n{llm_response}"
+            return f"## Answer\n\n{llm_response}"
         
-        return f"""## 🤖 Comprehensive Analysis
+        return f"""## Comprehensive Analysis
 
 {llm_response}
 
 ---
 
-## 📊 Additional Insights
+## Additional Insights
 
 {pattern_insights}"""
     
