@@ -22,14 +22,25 @@ from datetime import datetime
 try:
     import spacy
     try:
-        _NLP = spacy.load("en_core_web_trf")
+        _NLP = spacy.load("en_core_web_sm")
+        _HAS_SPACY = True
     except OSError:
         try:
-            _NLP = spacy.load("en_core_web_sm")
+            _NLP = spacy.load("en_core_web_trf")
+            _HAS_SPACY = True
         except OSError:
             _NLP = None
+            _HAS_SPACY = False
 except ImportError:
     _NLP = None
+    _HAS_SPACY = False
+
+# Try to import RapidFuzz for fuzzy matching
+try:
+    from rapidfuzz import fuzz
+    _HAS_RAPIDFUZZ = True
+except ImportError:
+    _HAS_RAPIDFUZZ = False
 
 
 # ---------- Experience Extraction Configuration ----------
@@ -562,6 +573,63 @@ def extract_experiences_with_nlp(text: str) -> List[Dict[str, Any]]:
         print(f"NLP experience extraction error: {e}")
     
     return experience_entries
+
+
+def parse_experience_with_dependency_parsing(text: str) -> Dict[str, Any]:
+    """
+    Advanced experience parsing using spaCy dependency parsing
+    
+    Uses linguistic structure to identify:
+    - Subject-verb-object relationships for responsibilities
+    - Noun phrases for job titles and company names
+    - Temporal expressions for date ranges
+    - Quantified achievements (numbers + units)
+    """
+    if not _HAS_SPACY or _NLP is None:
+        return {}
+    
+    try:
+        doc = _NLP(text[:50000])  # Limit for performance
+        
+        parsed_data = {
+            'responsibilities': [],
+            'achievements': [],
+            'technologies': [],
+            'metrics': []
+        }
+        
+        for sent in doc.sents:
+            # Extract action verbs and their objects (responsibilities)
+            for token in sent:
+                # Find verbs that indicate actions
+                if token.pos_ == 'VERB' and token.dep_ in ['ROOT', 'xcomp', 'ccomp']:
+                    # Get direct objects
+                    objs = [child.text for child in token.children if child.dep_ in ['dobj', 'pobj']]
+                    if objs:
+                        responsibility = f"{token.text} {' '.join(objs)}"
+                        parsed_data['responsibilities'].append(responsibility)
+                
+                # Extract numerical achievements
+                if token.like_num or token.is_digit:
+                    # Look for nearby context
+                    context_tokens = [t.text for t in sent if abs(t.i - token.i) < 5]
+                    # Check if this looks like a metric
+                    metric_keywords = ['%', 'percent', 'increase', 'decrease', 'reduced', 'improved', 'million', 'thousand']
+                    if any(keyword in ' '.join(context_tokens).lower() for keyword in metric_keywords):
+                        parsed_data['metrics'].append(' '.join(context_tokens))
+        
+        # Extract noun chunks that might be technologies or tools
+        for chunk in doc.noun_chunks:
+            chunk_text = chunk.text.lower()
+            # Common tech indicators
+            if any(word in chunk_text for word in ['system', 'platform', 'tool', 'framework', 'language', 'database']):
+                parsed_data['technologies'].append(chunk.text)
+        
+        return parsed_data
+    
+    except Exception as e:
+        print(f"Dependency parsing error: {e}")
+        return {}
 
 
 def extract_experiences_comprehensive(text: str) -> Dict[str, Any]:

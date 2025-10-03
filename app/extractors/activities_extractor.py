@@ -31,6 +31,13 @@ try:
 except ImportError:
     _NLP = None
 
+# Try to import FlashText for fast keyword extraction
+try:
+    from flashtext import KeywordProcessor
+    _FLASHTEXT_AVAILABLE = True
+except ImportError:
+    _FLASHTEXT_AVAILABLE = False
+
 
 # ---------- Activities Extraction Configuration ----------
 
@@ -154,6 +161,24 @@ FREQUENCY_PATTERNS = [
 
 # Compile patterns
 COMPILED_ACTIVITY_HEADERS = [re.compile(pattern, re.IGNORECASE) for pattern in ACTIVITY_SECTION_HEADERS]
+
+# Initialize FlashText processor for O(n) activity keyword matching
+_ACTIVITY_PROCESSOR = None
+if _FLASHTEXT_AVAILABLE:
+    _ACTIVITY_PROCESSOR = KeywordProcessor(case_sensitive=False)
+    
+    # Add common activity keywords
+    activity_keywords = [
+        'volunteer', 'volunteering', 'club', 'society', 'association',
+        'president', 'vice president', 'secretary', 'treasurer', 'member',
+        'captain', 'team leader', 'committee', 'organizer', 'coordinator',
+        'community service', 'social service', 'charity', 'fundraising',
+        'sports', 'athletics', 'music', 'dance', 'drama', 'art',
+        'student government', 'honor society', 'professional association'
+    ]
+    
+    for keyword in activity_keywords:
+        _ACTIVITY_PROCESSOR.add_keyword(keyword)
 COMPILED_ROLE_PATTERNS = [re.compile(pattern, re.IGNORECASE) for pattern in ROLE_PATTERNS]
 COMPILED_ORGANIZATION_PATTERNS = [re.compile(pattern, re.IGNORECASE) for pattern in ORGANIZATION_PATTERNS]
 COMPILED_ACTIVITY_DATE_PATTERNS = [re.compile(pattern, re.IGNORECASE) for pattern in ACTIVITY_DATE_PATTERNS]
@@ -410,6 +435,73 @@ def extract_activity_description(text: str) -> Optional[str]:
     return None
 
 
+def extract_activities_with_flashtext(text: str) -> List[str]:
+    """
+    Extract activity keywords using FlashText for O(n) matching
+    Fast detection of activity-related keywords
+    """
+    if not _FLASHTEXT_AVAILABLE or not _ACTIVITY_PROCESSOR:
+        return []
+    
+    # Extract activity keywords in O(n) time
+    found_keywords = _ACTIVITY_PROCESSOR.extract_keywords(text.lower())
+    
+    return list(set(found_keywords))
+
+
+def extract_activities_with_dependency_parsing(text: str) -> List[Dict[str, Any]]:
+    """
+    Extract activities using spaCy dependency parsing for better structure understanding
+    """
+    if not _NLP:
+        return []
+    
+    activities = []
+    
+    try:
+        doc = _NLP(text[:100000])
+        
+        activity_verbs = ['volunteer', 'organized', 'led', 'participated', 'served', 
+                         'coordinated', 'founded', 'managed', 'directed']
+        
+        for sent in doc.sents:
+            sent_text = sent.text.strip()
+            sent_lower = sent_text.lower()
+            
+            # Check if sentence describes an activity
+            if not any(verb in sent_lower for verb in activity_verbs):
+                continue
+            
+            # Extract entities
+            orgs = [ent.text for ent in sent.ents if ent.label_ == 'ORG']
+            dates = [ent.text for ent in sent.ents if ent.label_ == 'DATE']
+            
+            # Use dependency parsing to find roles and impacts
+            roles = []
+            for token in sent:
+                # Find role mentions (noun phrases with specific patterns)
+                if token.pos_ == 'NOUN' and token.dep_ in ['nsubj', 'attr', 'pobj']:
+                    role_phrase = ' '.join([t.text for t in token.subtree])
+                    if any(keyword in role_phrase.lower() for keyword in ['president', 'member', 'captain', 'leader']):
+                        roles.append(role_phrase)
+            
+            # Create activity entry if we found relevant information
+            if orgs or roles:
+                activity = {
+                    'description': sent_text,
+                    'organizations': orgs,
+                    'roles': roles,
+                    'dates': dates,
+                    'extraction_method': 'dependency_parsing'
+                }
+                activities.append(activity)
+        
+    except Exception as e:
+        print(f"Dependency parsing error in activities: {e}")
+    
+    return activities
+
+
 def extract_activities_with_nlp(text: str) -> List[Dict[str, Any]]:
     """Extract activity information using NLP and spaCy (if available)"""
     activity_entries = []
@@ -524,11 +616,21 @@ def extract_activities_comprehensive(text: str) -> List[Dict[str, Any]]:
             date_info = extract_activity_dates(activity_text)
             entry.update(date_info)
             
+            # Add FlashText keyword detection
+            if _FLASHTEXT_AVAILABLE:
+                flashtext_keywords = extract_activities_with_flashtext(activity_text)
+                if flashtext_keywords:
+                    entry['detected_keywords'] = flashtext_keywords
+            
             activity_entries.append(entry)
     
     # Step 3: Use NLP-based extraction as supplementary
     if _NLP and not activity_entries:
         nlp_entries = extract_activities_with_nlp(text)
+        dependency_entries = extract_activities_with_dependency_parsing(text)
+        
+        # Merge NLP entries
+        nlp_entries.extend(dependency_entries)
         
         for nlp_entry in nlp_entries:
             nlp_entry['extraction_method'] = 'nlp'

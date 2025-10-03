@@ -30,6 +30,20 @@ try:
 except ImportError:
     _NLP = None
 
+# Try to import RapidFuzz for fuzzy matching
+try:
+    from rapidfuzz import fuzz, process
+    _RAPIDFUZZ_AVAILABLE = True
+except ImportError:
+    _RAPIDFUZZ_AVAILABLE = False
+
+# Try to import FlashText for fast keyword extraction
+try:
+    from flashtext import KeywordProcessor
+    _FLASHTEXT_AVAILABLE = True
+except ImportError:
+    _FLASHTEXT_AVAILABLE = False
+
 
 # ---------- Certification Extraction Configuration ----------
 
@@ -301,6 +315,37 @@ COMPILED_CERT_EXPIRY_PATTERNS = [re.compile(pattern, re.IGNORECASE) for pattern 
 COMPILED_CERT_SECTION_HEADERS = [re.compile(pattern, re.IGNORECASE) for pattern in CERTIFICATION_SECTION_HEADERS]
 COMPILED_VERIFICATION_URL_PATTERNS = [re.compile(pattern, re.IGNORECASE) for pattern in VERIFICATION_URL_PATTERNS]
 
+# Initialize FlashText processor for O(n) certification matching
+_CERTIFICATION_PROCESSOR = None
+if _FLASHTEXT_AVAILABLE:
+    _CERTIFICATION_PROCESSOR = KeywordProcessor(case_sensitive=False)
+    
+    # Add all certification names as keywords for fast extraction
+    common_certifications = [
+        # Cloud
+        'aws certified', 'azure certified', 'google cloud certified', 'cka', 'ckad', 'cks',
+        # IT Security
+        'cissp', 'comptia security+', 'comptia network+', 'ccna', 'ccnp', 'ccie', 
+        'ceh', 'cism', 'cisa', 'crisc', 'oscp',
+        # Project Management
+        'pmp', 'capm', 'prince2', 'csm', 'psm', 'safe agilist',
+        # Data
+        'tableau certified', 'power bi certified', 'databricks certified', 'snowpro',
+        # Programming
+        'oracle certified', 'microsoft certified', 'rhcsa', 'rhce', 'salesforce certified',
+        # Finance
+        'cpa', 'cfa', 'frm', 'cma', 'cia',
+        # Quality
+        'six sigma', 'lean six sigma', 'itil foundation',
+        # Marketing
+        'hubspot certified', 'google analytics', 'gaiq', 'google ads certified',
+        # HR
+        'shrm-cp', 'shrm-scp', 'phr', 'sphr'
+    ]
+    
+    for cert in common_certifications:
+        _CERTIFICATION_PROCESSOR.add_keyword(cert)
+
 
 def detect_certification_sections(text: str) -> List[Tuple[int, int, str]]:
     """
@@ -518,6 +563,108 @@ def merge_certification_entries(entries: List[Dict[str, Any]]) -> List[Dict[str,
     return merged
 
 
+def extract_certifications_with_flashtext(text: str) -> List[Dict[str, Any]]:
+    """
+    Extract certifications using FlashText for O(n) keyword matching
+    Fast extraction of known certification names
+    """
+    if not _FLASHTEXT_AVAILABLE or not _CERTIFICATION_PROCESSOR:
+        return []
+    
+    certifications = []
+    
+    # Extract keywords in O(n) time - much faster than regex for many keywords
+    found_keywords = _CERTIFICATION_PROCESSOR.extract_keywords(text, span_info=True)
+    
+    for keyword, start, end in found_keywords:
+        # Get context around the certification
+        context_start = max(0, start - 200)
+        context_end = min(len(text), end + 200)
+        context = text[context_start:context_end]
+        
+        cert_entry = {
+            'name': keyword,
+            'position': (start, end),
+            'context': context,
+            'extraction_method': 'flashtext',
+            'confidence': 0.95  # High confidence for exact keyword matches
+        }
+        
+        # Try to extract additional information from context
+        cert_id = extract_certification_id(context)
+        if cert_id:
+            cert_entry['certification_id'] = cert_id
+        
+        dates = extract_certification_dates(context)
+        cert_entry.update(dates)
+        
+        issuer = extract_certification_issuer(context)
+        if issuer:
+            cert_entry['issuer'] = issuer
+        
+        certifications.append(cert_entry)
+    
+    return certifications
+
+
+def extract_certifications_with_fuzzy_matching(text: str, min_score: int = 88) -> List[Dict[str, Any]]:
+    """
+    Extract certifications using fuzzy matching to handle typos and variations
+    Catches misspellings like 'Kubernates' -> 'Kubernetes'
+    """
+    if not _RAPIDFUZZ_AVAILABLE:
+        return []
+    
+    certifications = []
+    
+    # Common certification names to fuzzy match against
+    common_cert_names = [
+        'AWS Certified Solutions Architect', 'AWS Certified Developer',
+        'Microsoft Azure Administrator', 'Azure Solutions Architect',
+        'Google Cloud Professional', 'Certified Kubernetes Administrator',
+        'CISSP', 'CompTIA Security+', 'CompTIA Network+',
+        'CCNA', 'CCNP', 'CCIE',
+        'PMP', 'PRINCE2', 'Certified Scrum Master',
+        'Tableau Certified', 'Power BI Certified',
+        'Oracle Certified Professional', 'Red Hat Certified',
+        'CPA', 'CFA', 'Six Sigma Black Belt',
+        'ITIL Foundation'
+    ]
+    
+    # Extract potential certification mentions from lines
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        line_clean = line.strip()
+        if len(line_clean) < 5:
+            continue
+        
+        # Check if line likely contains a certification
+        cert_indicators = ['certified', 'certification', 'certificate', 'credential']
+        if not any(indicator in line_clean.lower() for indicator in cert_indicators):
+            continue
+        
+        # Fuzzy match against known certifications
+        matches = process.extract(
+            line_clean,
+            common_cert_names,
+            scorer=fuzz.token_set_ratio,
+            limit=3
+        )
+        
+        for matched_cert, score, _ in matches:
+            if score >= min_score:
+                certifications.append({
+                    'name': matched_cert,
+                    'original_text': line_clean,
+                    'confidence': score / 100.0,
+                    'line_number': i,
+                    'extraction_method': 'fuzzy_matching'
+                })
+                break
+    
+    return certifications
+
+
 def extract_certifications_with_nlp(text: str) -> List[Dict[str, Any]]:
     """Extract certification information using NLP and spaCy (if available)"""
     certification_entries = []
@@ -634,8 +781,39 @@ def extract_certifications_comprehensive(text: str) -> List[Dict[str, Any]]:
                     break
             
             if not is_duplicate:
-                nlp_entry['extraction_method'] = 'nlp'
                 certification_entries.append(nlp_entry)
+    
+    # Step 3.5: Add FlashText extraction for fast O(n) keyword matching
+    if _FLASHTEXT_AVAILABLE:
+        flashtext_entries = extract_certifications_with_flashtext(text)
+        
+        for flashtext_entry in flashtext_entries:
+            # Check for duplicates
+            is_duplicate = False
+            for existing in certification_entries:
+                if (flashtext_entry.get('name') and existing.get('certification_name') and
+                    flashtext_entry['name'].lower() in existing['certification_name'].lower()):
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                certification_entries.append(flashtext_entry)
+    
+    # Step 3.75: Add fuzzy matching for typo handling
+    if _RAPIDFUZZ_AVAILABLE:
+        fuzzy_entries = extract_certifications_with_fuzzy_matching(text)
+        
+        for fuzzy_entry in fuzzy_entries:
+            # Check for duplicates
+            is_duplicate = False
+            for existing in certification_entries:
+                if (fuzzy_entry.get('name') and existing.get('certification_name') and
+                    fuzzy_entry['name'].lower() in existing['certification_name'].lower()):
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                certification_entries.append(fuzzy_entry)
     
     # Step 4: Merge duplicate entries
     certification_entries = merge_certification_entries(certification_entries)

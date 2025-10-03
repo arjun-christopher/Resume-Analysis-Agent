@@ -16,6 +16,20 @@ try:
 except ImportError:
     _NLP = None
 
+# Try to import RapidFuzz for fuzzy matching
+try:
+    from rapidfuzz import fuzz, process
+    _RAPIDFUZZ_AVAILABLE = True
+except ImportError:
+    _RAPIDFUZZ_AVAILABLE = False
+
+# Try to import FlashText for fast keyword extraction
+try:
+    from flashtext import KeywordProcessor
+    _FLASHTEXT_AVAILABLE = True
+except ImportError:
+    _FLASHTEXT_AVAILABLE = False
+
 # Comprehensive degree patterns covering all formats
 DEGREE_PATTERNS = {
     'doctorate': [
@@ -118,6 +132,45 @@ COMPILED_GPA_PATTERNS = [re.compile(pattern, re.IGNORECASE) for pattern in GPA_P
 COMPILED_EDUCATION_DATE_PATTERNS = [re.compile(pattern, re.IGNORECASE) for pattern in EDUCATION_DATE_PATTERNS]
 COMPILED_EDUCATION_HEADERS = [re.compile(pattern, re.IGNORECASE) for pattern in EDUCATION_SECTION_HEADERS]
 COMPILED_HONORS_PATTERNS = [re.compile(pattern, re.IGNORECASE) for pattern in HONORS_PATTERNS]
+
+# Comprehensive database of known universities and colleges for fuzzy matching
+KNOWN_INSTITUTIONS = [
+    # US Universities (Top 100+)
+    'stanford', 'mit', 'harvard', 'berkeley', 'caltech', 'princeton', 'yale', 'columbia',
+    'cornell', 'dartmouth', 'brown', 'penn', 'duke', 'northwestern', 'johns hopkins',
+    'university of chicago', 'carnegie mellon', 'georgia tech', 'university of michigan',
+    'ucla', 'usc', 'nyu', 'boston university', 'northeastern', 'purdue', 'virginia tech',
+    'university of washington', 'university of texas', 'university of illinois',
+    'university of california', 'ohio state', 'penn state', 'rutgers', 'university of florida',
+    'university of wisconsin', 'university of maryland', 'university of north carolina',
+    'university of virginia', 'university of georgia', 'university of minnesota',
+    # UK Universities
+    'oxford', 'cambridge', 'imperial college', 'ucl', 'lse', 'kings college', 'edinburgh',
+    'manchester', 'warwick', 'bristol', 'glasgow', 'birmingham', 'durham', 'southampton',
+    # Canadian Universities
+    'toronto', 'mcgill', 'ubc', 'waterloo', 'alberta', 'mcmaster', 'queens', 'montreal',
+    # Australian Universities
+    'melbourne', 'sydney', 'anu', 'unsw', 'queensland', 'monash', 'western australia',
+    # Indian Universities/Institutes
+    'iit', 'iiit', 'iim', 'nit', 'bits', 'delhi', 'bombay', 'bangalore', 'madras', 'kanpur',
+    'kharagpur', 'roorkee', 'guwahati', 'hyderabad', 'vit', 'manipal', 'anna university',
+    'jadavpur', 'pune', 'calcutta', 'banaras hindu', 'aligarh muslim',
+    # European Universities
+    'eth zurich', 'epfl', 'tu munich', 'tu delft', 'karolinska', 'copenhagen', 'lund',
+    'amsterdam', 'heidelberg', 'sorbonne', 'barcelona', 'madrid',
+    # Asian Universities
+    'tsinghua', 'peking', 'national university of singapore', 'nus', 'ntu', 'hkust',
+    'tokyo', 'kyoto', 'seoul national', 'kaist', 'fudan', 'zhejiang',
+    # Other notable
+    'technion', 'tel aviv', 'hebrew university',
+]
+
+# FlashText keyword processor for fast institution matching
+_INSTITUTION_PROCESSOR = None
+if _FLASHTEXT_AVAILABLE:
+    _INSTITUTION_PROCESSOR = KeywordProcessor(case_sensitive=False)
+    for institution in KNOWN_INSTITUTIONS:
+        _INSTITUTION_PROCESSOR.add_keyword(institution)
 
 
 def detect_education_sections(text: str) -> List[Tuple[int, int, str]]:
@@ -398,6 +451,170 @@ def extract_education_with_nlp(text: str) -> List[Dict[str, Any]]:
     return education_entries
 
 
+def extract_institutions_with_fuzzy_matching(text: str, min_score: int = 85) -> List[Dict[str, Any]]:
+    """
+    Extract institution names using fuzzy matching to handle typos and variations
+    
+    Args:
+        text: Text to extract institutions from
+        min_score: Minimum similarity score (0-100) for fuzzy matching
+    
+    Returns:
+        List of dictionaries with matched institutions and confidence scores
+    """
+    if not _RAPIDFUZZ_AVAILABLE:
+        return []
+    
+    institutions = []
+    
+    # Extract potential institution mentions using patterns
+    potential_institutions = []
+    for pattern in COMPILED_INSTITUTION_PATTERNS:
+        matches = pattern.finditer(text)
+        for match in matches:
+            institution_text = match.group(0).strip()
+            potential_institutions.append({
+                'text': institution_text,
+                'position': match.span()
+            })
+    
+    # Also check for known institutions using FlashText (O(n) speed)
+    if _INSTITUTION_PROCESSOR:
+        found_keywords = _INSTITUTION_PROCESSOR.extract_keywords(text.lower())
+        for keyword in found_keywords:
+            # Find position in original text
+            pos = text.lower().find(keyword)
+            if pos >= 0:
+                potential_institutions.append({
+                    'text': keyword,
+                    'position': (pos, pos + len(keyword)),
+                    'matched_keyword': keyword
+                })
+    
+    # Fuzzy match against known institutions
+    for potential in potential_institutions:
+        institution_text = potential['text'].lower()
+        
+        # Skip if too short or contains noise
+        if len(institution_text) < 3:
+            continue
+        
+        # Try direct match first
+        if institution_text in KNOWN_INSTITUTIONS:
+            institutions.append({
+                'original': potential['text'],
+                'matched': institution_text,
+                'confidence': 1.0,
+                'position': potential['position']
+            })
+            continue
+        
+        # Fuzzy match against known institutions
+        matches = process.extract(
+            institution_text,
+            KNOWN_INSTITUTIONS,
+            scorer=fuzz.token_sort_ratio,
+            limit=3
+        )
+        
+        for matched_inst, score, _ in matches:
+            if score >= min_score:
+                institutions.append({
+                    'original': potential['text'],
+                    'matched': matched_inst,
+                    'confidence': score / 100.0,
+                    'position': potential['position']
+                })
+                break
+    
+    # Remove duplicates (keep highest confidence)
+    seen = {}
+    for inst in institutions:
+        key = inst['position']
+        if key not in seen or inst['confidence'] > seen[key]['confidence']:
+            seen[key] = inst
+    
+    return list(seen.values())
+
+
+def extract_education_with_dependency_parsing(text: str) -> List[Dict[str, Any]]:
+    """
+    Extract education information using spaCy dependency parsing
+    for better contextual understanding
+    
+    Args:
+        text: Resume text to analyze
+    
+    Returns:
+        List of education entries with enhanced context
+    """
+    if not _NLP:
+        return []
+    
+    education_entries = []
+    
+    try:
+        # Limit text size for performance
+        doc = _NLP(text[:100000])
+        
+        # Find sentences with education-related content
+        education_keywords = [
+            'university', 'college', 'institute', 'school', 'academy',
+            'bachelor', 'master', 'phd', 'doctorate', 'degree',
+            'graduated', 'studied', 'major', 'diploma', 'certificate'
+        ]
+        
+        for sent in doc.sents:
+            sent_text = sent.text.strip()
+            sent_lower = sent_text.lower()
+            
+            # Check if sentence contains education keywords
+            if not any(keyword in sent_lower for keyword in education_keywords):
+                continue
+            
+            # Extract entities using NER
+            orgs = [ent.text for ent in sent.ents if ent.label_ == 'ORG']
+            dates = [ent.text for ent in sent.ents if ent.label_ == 'DATE']
+            locations = [ent.text for ent in sent.ents if ent.label_ in ['GPE', 'LOC']]
+            
+            # Extract degree using dependency parsing
+            degree_info = None
+            field_of_study = None
+            
+            for token in sent:
+                # Look for degree mentions
+                if token.text.lower() in ['bachelor', 'master', 'phd', 'doctorate', 'degree']:
+                    # Get the full noun phrase
+                    degree_phrase = ' '.join([t.text for t in token.subtree])
+                    degree_info = degree_phrase
+                    
+                    # Look for field of study in prepositional phrases
+                    for child in token.children:
+                        if child.dep_ == 'prep' and child.text.lower() in ['in', 'of']:
+                            for prep_child in child.children:
+                                if prep_child.dep_ == 'pobj':
+                                    field_phrase = ' '.join([t.text for t in prep_child.subtree])
+                                    field_of_study = field_phrase
+            
+            # Create entry if we found relevant information
+            if orgs or degree_info:
+                entry = {
+                    'sentence': sent_text,
+                    'degree': degree_info,
+                    'field_of_study': field_of_study,
+                    'institutions': orgs,
+                    'dates': dates,
+                    'locations': locations,
+                    'extraction_method': 'dependency_parsing'
+                }
+                education_entries.append(entry)
+        
+    except Exception as e:
+        print(f"Dependency parsing error: {e}")
+    
+    return education_entries
+
+
 def extract_education_comprehensive(text: str) -> List[Dict[str, Any]]:
     """
     Comprehensive education information extraction using multiple NLP techniques
@@ -465,6 +682,8 @@ def extract_education_comprehensive(text: str) -> List[Dict[str, Any]]:
     # Step 3: Use NLP-based extraction as supplementary
     if _NLP:
         nlp_entries = extract_education_with_nlp(text)
+        dependency_entries = extract_education_with_dependency_parsing(text)
+        nlp_entries.extend(dependency_entries)
         
         for nlp_entry in nlp_entries:
             is_duplicate = False
@@ -481,6 +700,22 @@ def extract_education_comprehensive(text: str) -> List[Dict[str, Any]]:
     
     # Step 4: Merge duplicate entries
     education_entries = merge_education_entries(education_entries)
+    
+    # Step 4.5: Enhance with fuzzy matching for institutions
+    if _RAPIDFUZZ_AVAILABLE:
+        fuzzy_institutions = extract_institutions_with_fuzzy_matching(text)
+        
+        # Enrich existing entries with fuzzy-matched institutions
+        for entry in education_entries:
+            if entry.get('institution'):
+                institution_text = entry['institution'].lower()
+                # Find best fuzzy match for this institution
+                for fuzzy_inst in fuzzy_institutions:
+                    if institution_text in fuzzy_inst['original'].lower() or \
+                       fuzzy_inst['original'].lower() in institution_text:
+                        entry['matched_institution'] = fuzzy_inst['matched']
+                        entry['institution_confidence'] = fuzzy_inst['confidence']
+                        break
     
     # Step 5: Clean up and format final entries
     final_entries = []

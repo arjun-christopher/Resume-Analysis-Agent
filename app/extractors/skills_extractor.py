@@ -16,6 +16,36 @@ try:
 except ImportError:
     _HAS_FLASHTEXT = False
 
+try:
+    import spacy
+    try:
+        _NLP = spacy.load("en_core_web_sm")
+        _HAS_SPACY = True
+    except OSError:
+        _NLP = None
+        _HAS_SPACY = False
+except ImportError:
+    _NLP = None
+    _HAS_SPACY = False
+
+# ---------- Initialize FlashText KeywordProcessor for Fast Extraction ----------
+_KEYWORD_PROCESSOR = None
+
+def _initialize_keyword_processor():
+    """Initialize FlashText KeywordProcessor with all skills (O(n) extraction)"""
+    global _KEYWORD_PROCESSOR
+    if not _HAS_FLASHTEXT or _KEYWORD_PROCESSOR is not None:
+        return
+    
+    _KEYWORD_PROCESSOR = KeywordProcessor(case_sensitive=False)
+    
+    # Add all skills from database
+    for category, skills in SKILLS_DATABASE.items():
+        for skill in skills:
+            _KEYWORD_PROCESSOR.add_keyword(skill, (skill.lower(), category))
+    
+    return _KEYWORD_PROCESSOR
+
 # ---------- Comprehensive Skills Database ----------
 SKILLS_DATABASE = {
     # Programming Languages
@@ -572,6 +602,131 @@ def categorize_extracted_skills(skills: List[str]) -> Dict[str, List[str]]:
     # Remove empty categories
     return {k: v for k, v in categorized.items() if v}
 
+def extract_skills_with_nlp(text: str) -> Dict[str, List[str]]:
+    """
+    Advanced NLP-based skill extraction using spaCy NER and context analysis
+    
+    This function uses:
+    1. SpaCy NER to identify technical terms and entities
+    2. Dependency parsing to understand context
+    3. Contextual matching to validate skills
+    """
+    skills_by_nlp = {
+        'technical_entities': [],
+        'product_entities': [],
+        'contextual_skills': []
+    }
+    
+    if not _HAS_SPACY or _NLP is None:
+        return skills_by_nlp
+    
+    try:
+        doc = _NLP(text[:100000])  # Limit text size for performance
+        
+        # Extract named entities that could be skills
+        for ent in doc.ents:
+            ent_text = ent.text.lower()
+            
+            # Technical terms (PRODUCT, ORG, GPE for tech companies/products)
+            if ent.label_ in ['PRODUCT', 'ORG', 'GPE']:
+                # Check if it matches known skills
+                for category_skills in SKILLS_DATABASE.values():
+                    if ent_text in category_skills:
+                        skills_by_nlp['technical_entities'].append(ent.text)
+                        break
+            
+            # Also check ORG entities for technology names
+            if ent.label_ == 'ORG':
+                skills_by_nlp['product_entities'].append(ent.text)
+        
+        # Use dependency parsing to find skill mentions in context
+        # Look for patterns like "experience with X", "proficient in X", "used X"
+        skill_context_patterns = ['experience', 'proficient', 'skilled', 'expert', 'knowledge', 'familiar', 'working', 'using', 'used']
+        
+        for token in doc:
+            if token.lemma_ in skill_context_patterns:
+                # Get objects and conjunctions related to this verb
+                for child in token.children:
+                    if child.dep_ in ['dobj', 'pobj', 'conj']:
+                        phrase = child.text.lower()
+                        # Check against known skills
+                        for category_skills in SKILLS_DATABASE.values():
+                            if phrase in category_skills:
+                                skills_by_nlp['contextual_skills'].append(child.text)
+                                break
+        
+    except Exception as e:
+        print(f"NLP extraction warning: {e}")
+    
+    return skills_by_nlp
+
+def extract_skills_flashtext(text: str) -> Dict[str, List[Tuple[str, str]]]:
+    """
+    Ultra-fast skill extraction using FlashText (O(n) complexity)
+    
+    FlashText is significantly faster than regex for large vocabularies:
+    - O(n) where n = length of text
+    - Independent of number of keywords
+    - 10-100x faster than regex for large keyword sets
+    """
+    if not _HAS_FLASHTEXT:
+        return {}
+    
+    # Initialize processor if not already done
+    if _KEYWORD_PROCESSOR is None:
+        _initialize_keyword_processor()
+    
+    if _KEYWORD_PROCESSOR is None:
+        return {}
+    
+    # Extract all skills in single pass (O(n))
+    found_keywords = _KEYWORD_PROCESSOR.extract_keywords(text.lower())
+    
+    # Organize by category
+    skills_by_category = defaultdict(list)
+    for skill_data in found_keywords:
+        skill_name, category = skill_data
+        skills_by_category[category].append(skill_name)
+    
+    return dict(skills_by_category)
+
+def extract_skills_with_fuzzy_matching(text: str, min_score: int = 85) -> List[Tuple[str, str, int]]:
+    """
+    Extract skills using fuzzy matching for handling typos and variations
+    
+    Args:
+        text: Text to extract skills from
+        min_score: Minimum similarity score (0-100)
+    
+    Returns:
+        List of (skill, matched_text, score) tuples
+    """
+    if not _HAS_RAPIDFUZZ:
+        return []
+    
+    # Extract potential skill mentions (alphanumeric sequences)
+    words = re.findall(r'\b[A-Za-z][A-Za-z0-9+#\-\.]{1,30}\b', text)
+    
+    # Build comprehensive skill list
+    all_skills = []
+    for skills_set in SKILLS_DATABASE.values():
+        all_skills.extend(skills_set)
+    
+    matched_skills = []
+    
+    # Batch fuzzy matching for performance
+    for word in set(words):  # Use set to avoid duplicate checks
+        if len(word) < 3:  # Skip very short words
+            continue
+        
+        # Find best match
+        best_match = process.extractOne(word.lower(), all_skills, scorer=fuzz.ratio)
+        
+        if best_match and best_match[1] >= min_score:
+            matched_skills.append((best_match[0], word, best_match[1]))
+    
+    return matched_skills
+
 def extract_comprehensive_skills(text: str) -> Dict[str, Any]:
     """
     Main function to extract all types of skills from resume text
@@ -619,6 +774,31 @@ def extract_comprehensive_skills(text: str) -> Dict[str, Any]:
                 comprehensive_skills['all_skills']['raw_skills'].append(skill)
                 comprehensive_skills['all_skills']['skill_levels'][skill] = full_text_skills['skill_levels'].get(skill, 'intermediate')
                 comprehensive_skills['all_skills']['confidence_scores'][skill] = full_text_skills['confidence_scores'].get(skill, 0.5)
+    
+    # ========== ADVANCED NLP EXTRACTION ==========
+    # Use FlashText for ultra-fast extraction (O(n) complexity)
+    flashtext_skills = extract_skills_flashtext(text)
+    for category, skills in flashtext_skills.items():
+        for skill in skills:
+            if skill not in [s.lower() for s in comprehensive_skills['all_skills']['raw_skills']]:
+                comprehensive_skills['all_skills']['raw_skills'].append(skill.title())
+                comprehensive_skills['all_skills']['confidence_scores'][skill.title()] = 0.9  # High confidence from direct match
+    
+    # Use spaCy NER for contextual skill extraction
+    nlp_skills = extract_skills_with_nlp(text)
+    for skill_type, skills in nlp_skills.items():
+        for skill in skills:
+            if skill not in comprehensive_skills['all_skills']['raw_skills']:
+                comprehensive_skills['all_skills']['raw_skills'].append(skill)
+                comprehensive_skills['all_skills']['confidence_scores'][skill] = 0.8  # Good confidence from NER
+    
+    # Use fuzzy matching for typos and variations (only if we have few skills)
+    if len(comprehensive_skills['all_skills']['raw_skills']) < 15:
+        fuzzy_skills = extract_skills_with_fuzzy_matching(text, min_score=88)
+        for skill, matched_text, score in fuzzy_skills:
+            if skill not in [s.lower() for s in comprehensive_skills['all_skills']['raw_skills']]:
+                comprehensive_skills['all_skills']['raw_skills'].append(skill.title())
+                comprehensive_skills['all_skills']['confidence_scores'][skill.title()] = score / 100.0
     
     # Final categorization
     comprehensive_skills['all_skills']['categorized_skills'] = categorize_extracted_skills(

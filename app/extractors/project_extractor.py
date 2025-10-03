@@ -30,6 +30,13 @@ try:
 except ImportError:
     _NLP = None
 
+# Try to import FlashText for fast keyword extraction
+try:
+    from flashtext import KeywordProcessor
+    _FLASHTEXT_AVAILABLE = True
+except ImportError:
+    _FLASHTEXT_AVAILABLE = False
+
 
 # ---------- Project Extraction Configuration ----------
 
@@ -175,6 +182,21 @@ COMPILED_ACHIEVEMENT_PATTERNS = [re.compile(pattern, re.IGNORECASE) for pattern 
 COMPILED_PROJECT_TYPE_PATTERNS = {}
 for project_type, patterns in PROJECT_TYPE_PATTERNS.items():
     COMPILED_PROJECT_TYPE_PATTERNS[project_type] = [re.compile(pattern, re.IGNORECASE) for pattern in patterns]
+
+# Initialize FlashText processor for O(n) technology matching
+_TECHNOLOGY_PROCESSOR = None
+if _FLASHTEXT_AVAILABLE:
+    _TECHNOLOGY_PROCESSOR = KeywordProcessor(case_sensitive=False)
+    
+    # Add common technologies for fast extraction
+    technologies = [
+        'python', 'javascript', 'java', 'react', 'angular', 'vue', 'node.js',
+        'django', 'flask', 'spring', 'docker', 'kubernetes', 'aws', 'azure',
+        'postgresql', 'mongodb', 'redis', 'tensorflow', 'pytorch', 'scikit-learn'
+    ]
+    
+    for tech in technologies:
+        _TECHNOLOGY_PROCESSOR.add_keyword(tech)
 
 
 def detect_project_sections(text: str) -> List[Tuple[int, int, str]]:
@@ -594,6 +616,15 @@ def extract_projects_comprehensive(text: str) -> List[Dict[str, Any]]:
             # Extract dates
             date_info = extract_project_dates(project_text)
             entry.update(date_info)
+            
+            # Add FlashText technology extraction for O(n) speed
+            if _FLASHTEXT_AVAILABLE and _TECHNOLOGY_PROCESSOR:
+                flashtext_techs = _TECHNOLOGY_PROCESSOR.extract_keywords(project_text.lower())
+                if flashtext_techs:
+                    existing_techs = entry.get('technologies', [])
+                    # Merge with existing technologies
+                    all_techs = set(existing_techs + list(flashtext_techs))
+                    entry['technologies'] = list(all_techs)
             
             project_entries.append(entry)
     

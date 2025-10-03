@@ -30,6 +30,54 @@ try:
 except ImportError:
     _NLP = None
 
+# Try to import FlashText for fast keyword extraction
+try:
+    from flashtext import KeywordProcessor
+    _FLASHTEXT_AVAILABLE = True
+except ImportError:
+    _FLASHTEXT_AVAILABLE = False
+
+# Initialize FlashText processor for fast publication keyword detection
+_PUBLICATION_PROCESSOR = None
+if _FLASHTEXT_AVAILABLE:
+    _PUBLICATION_PROCESSOR = KeywordProcessor(case_sensitive=False)
+    
+    # Publication venue and type keywords
+    publication_keywords = [
+        # Major academic publishers
+        'ieee', 'acm', 'springer', 'elsevier', 'nature', 'science', 'plos',
+        'wiley', 'oxford university press', 'cambridge university press',
+        
+        # Publication types
+        'journal', 'conference', 'paper', 'proceedings', 'publication',
+        'symposium', 'workshop', 'poster', 'presentation', 'seminar',
+        'thesis', 'dissertation', 'book', 'chapter', 'patent', 'report',
+        
+        # Preprint servers
+        'arxiv', 'biorxiv', 'medrxiv', 'ssrn', 'preprint',
+        
+        # Top AI/ML conferences
+        'neurips', 'icml', 'iclr', 'cvpr', 'iccv', 'eccv', 'aaai', 'ijcai',
+        'acl', 'emnlp', 'naacl', 'coling', 'sigir', 'kdd', 'www',
+        
+        # Top CS conferences
+        'sigcomm', 'sigmod', 'vldb', 'osdi', 'sosp', 'nsdi', 'usenix',
+        'pldi', 'popl', 'icse', 'fse', 'chi', 'uist',
+        
+        # Medical/bio journals
+        'lancet', 'nejm', 'bmj', 'jama', 'cell', 'pnas',
+        
+        # Physics/math journals
+        'physical review', 'aps', 'annals of mathematics',
+        
+        # Publication actions
+        'published', 'accepted', 'presented', 'submitted', 'under review',
+        'appeared', 'authored', 'co-authored', 'edited',
+    ]
+    
+    for keyword in publication_keywords:
+        _PUBLICATION_PROCESSOR.add_keyword(keyword)
+
 
 # ---------- Publications Extraction Configuration ----------
 
@@ -481,6 +529,118 @@ def detect_publication_type(text: str) -> List[str]:
     return pub_types
 
 
+def extract_publications_with_flashtext(text: str) -> Dict[str, Any]:
+    """
+    Fast publication keyword extraction using FlashText
+    Returns: Dict with detected keywords and their frequencies
+    """
+    if not _FLASHTEXT_AVAILABLE or not _PUBLICATION_PROCESSOR:
+        return {}
+    
+    try:
+        text_sample = text[:50000]  # Limit text size for performance
+        keywords_found = _PUBLICATION_PROCESSOR.extract_keywords(text_sample)
+        
+        # Count keyword frequencies
+        keyword_counts = {}
+        for keyword in keywords_found:
+            keyword_counts[keyword] = keyword_counts.get(keyword, 0) + 1
+        
+        # Categorize keywords
+        venues = []
+        pub_types = []
+        actions = []
+        
+        for keyword, count in keyword_counts.items():
+            keyword_lower = keyword.lower()
+            
+            # Categorize by type
+            if keyword_lower in ['ieee', 'acm', 'springer', 'elsevier', 'nature', 'science', 
+                                'plos', 'wiley', 'oxford university press', 'cambridge university press',
+                                'lancet', 'nejm', 'bmj', 'jama', 'cell', 'pnas']:
+                venues.append(keyword)
+            
+            elif keyword_lower in ['journal', 'conference', 'symposium', 'workshop', 
+                                  'thesis', 'dissertation', 'book', 'patent']:
+                pub_types.append(keyword)
+            
+            elif keyword_lower in ['published', 'accepted', 'presented', 'submitted', 
+                                  'appeared', 'authored', 'co-authored', 'edited']:
+                actions.append(keyword)
+        
+        return {
+            'all_keywords': keyword_counts,
+            'venues': venues,
+            'publication_types': pub_types,
+            'actions': actions,
+            'total_keywords': len(keywords_found)
+        }
+    
+    except Exception as e:
+        print(f"FlashText publication extraction error: {e}")
+        return {}
+
+
+def extract_publications_with_dependency_parsing(text: str) -> List[Dict[str, Any]]:
+    """
+    Extract publication information using spaCy dependency parsing
+    Returns: List of publication entries with structured information
+    """
+    publication_entries = []
+    
+    if not _NLP:
+        return publication_entries
+    
+    try:
+        text_sample = text[:100000]  # Limit text for performance
+        doc = _NLP(text_sample)
+        
+        # Look for publication-related verbs and their objects
+        publication_verbs = ['publish', 'present', 'author', 'write', 'submit', 
+                            'accept', 'appear', 'edit', 'contribute']
+        
+        for token in doc:
+            if token.lemma_ in publication_verbs:
+                entry = {
+                    'action': token.text,
+                    'raw_text': token.sent.text.strip()
+                }
+                
+                # Find direct objects (what was published)
+                for child in token.children:
+                    if child.dep_ in ['dobj', 'pobj', 'attr']:
+                        # Get the full noun phrase
+                        title_candidates = []
+                        for np in child.sent.noun_chunks:
+                            if child in np:
+                                title_candidates.append(np.text)
+                        
+                        if title_candidates:
+                            entry['title_candidate'] = title_candidates[0]
+                
+                # Extract named entities from the sentence
+                for ent in token.sent.ents:
+                    if ent.label_ == 'DATE':
+                        entry['year_candidate'] = ent.text
+                    elif ent.label_ == 'ORG':
+                        if 'venue_candidates' not in entry:
+                            entry['venue_candidates'] = []
+                        entry['venue_candidates'].append(ent.text)
+                    elif ent.label_ == 'PERSON':
+                        if 'authors_candidates' not in entry:
+                            entry['authors_candidates'] = []
+                        entry['authors_candidates'].append(ent.text)
+                
+                # Only add if we found useful information
+                if len(entry) > 2:
+                    publication_entries.append(entry)
+    
+    except Exception as e:
+        print(f"Dependency parsing publication extraction error: {e}")
+    
+    return publication_entries
+
+
 def extract_publications_with_nlp(text: str) -> List[Dict[str, Any]]:
     """Extract publication information using NLP and spaCy (if available)"""
     publication_entries = []
@@ -604,7 +764,24 @@ def extract_publications_comprehensive(text: str) -> Dict[str, Any]:
             
             publication_entries.append(entry)
     
-    # Step 3: Use NLP-based extraction as supplementary
+    # Step 3: Use FlashText for fast keyword detection
+    flashtext_results = {}
+    if _FLASHTEXT_AVAILABLE and _PUBLICATION_PROCESSOR:
+        flashtext_results = extract_publications_with_flashtext(text)
+    
+    # Step 4: Use dependency parsing for structured extraction
+    dependency_results = []
+    if _NLP:
+        dependency_results = extract_publications_with_dependency_parsing(text)
+        
+        # Add dependency parsing results as supplementary entries
+        for dep_entry in dependency_results:
+            dep_entry['extraction_method'] = 'dependency_parsing'
+            # Check if this looks like a real publication
+            if dep_entry.get('title_candidate') or dep_entry.get('venue_candidates'):
+                publication_entries.append(dep_entry)
+    
+    # Step 5: Use NLP-based extraction as supplementary
     if _NLP and not publication_entries:
         nlp_entries = extract_publications_with_nlp(text)
         
@@ -612,21 +789,30 @@ def extract_publications_comprehensive(text: str) -> Dict[str, Any]:
             nlp_entry['extraction_method'] = 'nlp'
             publication_entries.append(nlp_entry)
     
-    # Step 4: Clean up and format final entries
+    # Step 6: Clean up and format final entries
     final_entries = []
     for entry in publication_entries:
         # Remove empty fields
         cleaned_entry = {k: v for k, v in entry.items() if v}
         
         # Ensure at least title or venue is present
-        if cleaned_entry.get('title') or cleaned_entry.get('venue'):
+        if cleaned_entry.get('title') or cleaned_entry.get('venue') or \
+           cleaned_entry.get('title_candidate') or cleaned_entry.get('venue_candidates'):
+            # Add FlashText detected keywords if available
+            if flashtext_results and flashtext_results.get('all_keywords'):
+                cleaned_entry['detected_keywords'] = list(flashtext_results['all_keywords'].keys())[:10]
+            
             final_entries.append(cleaned_entry)
     
-    # Step 5: Sort by year (most recent first)
+    # Step 7: Sort by year (most recent first)
     def get_sort_key(entry):
-        year = entry.get('year', '')
+        year = entry.get('year', '') or entry.get('year_candidate', '')
         if year:
             try:
+                # Extract just the year number if it's in a longer string
+                year_match = re.search(r'\b(19\d{2}|20\d{2})\b', str(year))
+                if year_match:
+                    return int(year_match.group(1))
                 return int(year)
             except (ValueError, TypeError):
                 pass
@@ -634,14 +820,15 @@ def extract_publications_comprehensive(text: str) -> Dict[str, Any]:
     
     final_entries.sort(key=get_sort_key, reverse=True)
     
-    # Step 6: Add statistics
+    # Step 8: Add statistics
     pub_stats = {
         'total_count': len(final_entries),
         'by_type': {},
         'with_doi': sum(1 for p in final_entries if p.get('doi')),
         'with_citations': sum(1 for p in final_entries if p.get('citations')),
         'total_citations': 0,
-        'years': []
+        'years': [],
+        'flashtext_analysis': flashtext_results if flashtext_results else None
     }
     
     for pub in final_entries:

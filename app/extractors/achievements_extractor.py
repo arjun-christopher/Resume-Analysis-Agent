@@ -30,6 +30,13 @@ try:
 except ImportError:
     _NLP = None
 
+# Try to import RapidFuzz for fuzzy matching
+try:
+    from rapidfuzz import fuzz, process
+    _RAPIDFUZZ_AVAILABLE = True
+except ImportError:
+    _RAPIDFUZZ_AVAILABLE = False
+
 
 # ---------- Achievements Extraction Configuration ----------
 
@@ -541,6 +548,161 @@ def deduplicate_achievements(achievements: List[Dict[str, Any]]) -> List[Dict[st
     return unique_achievements
 
 
+def extract_achievements_with_dependency_parsing(text: str) -> List[Dict[str, Any]]:
+    """
+    Extract achievements using spaCy dependency parsing for better metric extraction
+    Focuses on finding quantified achievements with numerical metrics
+    """
+    if not _NLP:
+        return []
+    
+    achievements = []
+    
+    try:
+        # Limit text size for performance
+        doc = _NLP(text[:100000])
+        
+        achievement_verbs = [
+            'achieved', 'increased', 'improved', 'reduced', 'decreased',
+            'generated', 'saved', 'delivered', 'led', 'managed', 'built', 'created'
+        ]
+        
+        for sent in doc.sents:
+            sent_text = sent.text.strip()
+            sent_lower = sent_text.lower()
+            
+            # Check if sentence contains achievement indicators
+            if not any(verb in sent_lower for verb in achievement_verbs):
+                continue
+            
+            # Extract metrics using NER and dependency parsing
+            metrics = []
+            percentages = []
+            dollar_amounts = []
+            quantities = []
+            
+            for token in sent:
+                # Find percentage values
+                if token.text == '%' or 'percent' in token.text.lower():
+                    # Look for numbers before the percentage
+                    for child in token.children:
+                        if child.pos_ == 'NUM':
+                            percentages.append(f"{child.text}%")
+                    
+                    # Check left context
+                    if token.i > 0 and sent[token.i-1].pos_ == 'NUM':
+                        percentages.append(f"{sent[token.i-1].text}%")
+                
+                # Find dollar amounts
+                if token.text == '$':
+                    # Get number after dollar sign
+                    if token.i < len(sent) - 1:
+                        next_token = sent[token.i+1]
+                        if next_token.pos_ == 'NUM' or next_token.like_num:
+                            amount = f"${next_token.text}"
+                            # Check for million/billion
+                            if token.i < len(sent) - 2:
+                                scale = sent[token.i+2].text.lower()
+                                if scale in ['million', 'billion', 'm', 'b', 'k', 'thousand']:
+                                    amount += f" {scale}"
+                            dollar_amounts.append(amount)
+                
+                # Find user/customer numbers
+                if token.text.lower() in ['users', 'customers', 'clients', 'subscribers', 'members']:
+                    # Look for numbers before
+                    for ancestor in token.ancestors:
+                        if ancestor.pos_ == 'NUM':
+                            quantities.append(f"{ancestor.text} {token.text}")
+                            break
+                    
+                    if token.i > 0 and sent[token.i-1].pos_ == 'NUM':
+                        quantities.append(f"{sent[token.i-1].text} {token.text}")
+            
+            # If we found metrics, this is likely an achievement
+            if percentages or dollar_amounts or quantities:
+                achievement = {
+                    'description': sent_text,
+                    'extraction_method': 'dependency_parsing',
+                    'metrics': {
+                        'percentages': percentages,
+                        'dollar_amounts': dollar_amounts,
+                        'quantities': quantities
+                    }
+                }
+                
+                # Categorize the achievement
+                achievement['category'] = categorize_achievement(sent_text)
+                
+                achievements.append(achievement)
+        
+    except Exception as e:
+        print(f"Dependency parsing error in achievements: {e}")
+    
+    return achievements
+
+
+def extract_achievements_with_ner(text: str) -> List[Dict[str, Any]]:
+    """
+    Extract achievements using Named Entity Recognition
+    Identifies organizations, products, and numerical entities
+    """
+    if not _NLP:
+        return []
+    
+    achievements = []
+    
+    try:
+        doc = _NLP(text[:100000])
+        
+        achievement_keywords = [
+            'award', 'winner', 'recognition', 'honor', 'achievement',
+            'published', 'patent', 'speaker', 'featured'
+        ]
+        
+        for sent in doc.sents:
+            sent_text = sent.text.strip()
+            sent_lower = sent_text.lower()
+            
+            # Check if sentence contains achievement keywords
+            if not any(keyword in sent_lower for keyword in achievement_keywords):
+                continue
+            
+            # Extract entities
+            orgs = [ent.text for ent in sent.ents if ent.label_ == 'ORG']
+            products = [ent.text for ent in sent.ents if ent.label_ == 'PRODUCT']
+            dates = [ent.text for ent in sent.ents if ent.label_ == 'DATE']
+            
+            if orgs or products:
+                achievement = {
+                    'description': sent_text,
+                    'extraction_method': 'ner',
+                    'entities': {
+                        'organizations': orgs,
+                        'products': products,
+                        'dates': dates
+                    }
+                }
+                
+                # Determine achievement type
+                if 'award' in sent_lower or 'winner' in sent_lower:
+                    achievement['type'] = 'award'
+                elif 'published' in sent_lower:
+                    achievement['type'] = 'publication'
+                elif 'speaker' in sent_lower or 'presented' in sent_lower:
+                    achievement['type'] = 'speaking'
+                else:
+                    achievement['type'] = 'recognition'
+                
+                achievement['category'] = categorize_achievement(sent_text)
+                
+                achievements.append(achievement)
+        
+    except Exception as e:
+        print(f"NER extraction error in achievements: {e}")
+    
+    return achievements
+
+
 def extract_achievements_comprehensive(text: str) -> List[Dict[str, Any]]:
     """
     Comprehensive achievement extraction using multiple techniques
@@ -609,6 +771,15 @@ def extract_achievements_comprehensive(text: str) -> List[Dict[str, Any]]:
         all_achievements.extend(extract_speaking_engagements(text))
         all_achievements.extend(extract_media_mentions(text))
         all_achievements.extend(extract_bullet_achievements(text))
+    
+    # Step 3.5: Add NLP-based extraction for better metric detection
+    if _NLP:
+        dependency_achievements = extract_achievements_with_dependency_parsing(text)
+        ner_achievements = extract_achievements_with_ner(text)
+        
+        # Add NLP-extracted achievements
+        all_achievements.extend(dependency_achievements)
+        all_achievements.extend(ner_achievements)
     
     # Step 4: Deduplicate
     all_achievements = deduplicate_achievements(all_achievements)
