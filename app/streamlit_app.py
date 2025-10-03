@@ -150,12 +150,6 @@ with st.sidebar:
         if resume_list:
             st.markdown("### Indexed Resumes")
             st.caption(f"{len(resume_list)} unique resumes indexed")
-            
-            with st.expander("View Resume List", expanded=False):
-                for idx, resume_info in enumerate(resume_list[:20], 1):
-                    st.write(f"{idx}. {resume_info['resume_name']}")
-                if len(resume_list) > 20:
-                    st.caption(f"...and {len(resume_list)-20} more")
     
     if files:
         with st.expander("Files", expanded=False):

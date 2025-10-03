@@ -1281,7 +1281,7 @@ class AdvancedRAGEngine:
         # If grouped results available, show resume breakdown
         if grouped_results:
             resume_names = [key.split('|', 1)[1] for key in grouped_results.keys()]
-            insights.append(f"**📋 Resumes Analyzed:** {len(grouped_results)} ({', '.join(resume_names[:5])}{' and more...' if len(resume_names) > 5 else ''})")
+            insights.append(f"**Resumes Analyzed:** {len(grouped_results)} ({', '.join(resume_names[:5])}{' and more...' if len(resume_names) > 5 else ''})")
         
         # Aggregate data by section type
         section_data = defaultdict(list)
@@ -1296,7 +1296,7 @@ class AdvancedRAGEngine:
                 if 'emails' in metadata:
                     emails.update(metadata['emails'])
             if emails:
-                insights.append(f"**📧 Emails Found:** {', '.join(sorted(emails))}")
+                insights.append(f"**Emails Found:** {', '.join(sorted(emails))}")
         
         if any(word in question_lower for word in ['skill', 'technology']):
             skills = set()
@@ -1305,11 +1305,11 @@ class AdvancedRAGEngine:
                     skills.update(metadata.get('skills', []))
                     skills.update(metadata.get('technical_skills', []))
             if skills:
-                insights.append(f"**💻 Skills:** {', '.join(list(skills)[:15])}")
+                insights.append(f"**Skills:** {', '.join(list(skills)[:15])}")
         
         # Section summary
         if section_data:
-            insights.append(f"\n**📑 Sections Retrieved:** {', '.join(section_data.keys())}")
+            insights.append(f"\n**Sections Retrieved:** {', '.join(section_data.keys())}")
         
         return '\n'.join(insights) if insights else ""
     
