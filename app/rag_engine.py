@@ -65,6 +65,12 @@ try:
     _HAS_LANGCHAIN = True
 except ImportError:
     _HAS_LANGCHAIN = False
+    # Fallback Document class if langchain not available
+    class Document:
+        """Fallback Document class for when langchain is not available"""
+        def __init__(self, page_content: str = "", metadata: dict = None):
+            self.page_content = page_content
+            self.metadata = metadata or {}
 
 # API LLMs
 try:
@@ -573,13 +579,40 @@ class HybridSearchEngine:
         self.embed_method = "dummy"
         logger.warning("⚠️ Using dummy embeddings")
     
-    def embed_texts(self, texts: List[str]) -> np.ndarray:
-        """Embed texts using configured method"""
+    def embed_texts(self, texts: List[str], batch_size: int = 64) -> np.ndarray:
+        """
+        Embed texts using configured method with batch processing for efficiency
+        
+        Args:
+            texts: List of texts to embed
+            batch_size: Number of texts to process in each batch (default: 64)
+                       Optimal range is 32-128 for better BLAS operations
+        
+        Returns:
+            numpy array of embeddings
+        """
+        if not texts:
+            return np.array([])
+        
         if self.embed_method == "fastembed":
+            # FastEmbed handles batching internally
             embeddings = list(self.embedder.embed(texts))
             return np.array(embeddings)
         elif self.embed_method == "sentence_transformers":
-            return self.embedder.encode(texts, show_progress_bar=False)
+            # Process in batches for better performance
+            all_embeddings = []
+            for i in range(0, len(texts), batch_size):
+                batch = texts[i:i + batch_size]
+                batch_embeddings = self.embedder.encode(
+                    batch, 
+                    show_progress_bar=False,
+                    batch_size=batch_size,
+                    convert_to_numpy=True
+                )
+                all_embeddings.append(batch_embeddings)
+            
+            # Concatenate all batches
+            return np.vstack(all_embeddings) if len(all_embeddings) > 1 else all_embeddings[0]
         else:
             # Dummy embeddings
             return np.random.random((len(texts), 384)).astype(np.float32)

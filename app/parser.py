@@ -15,6 +15,38 @@ from typing import Any, Dict, List, Tuple, Optional, Set
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
+# Performance optimization libraries
+try:
+    import joblib
+    from joblib import Parallel, delayed
+    _HAS_JOBLIB = True
+except ImportError:
+    _HAS_JOBLIB = False
+    Parallel = None
+    delayed = None
+
+try:
+    import pickle
+    _HAS_PICKLE = True
+except ImportError:
+    _HAS_PICKLE = False
+
+try:
+    from multiprocessing import cpu_count
+    _CPU_COUNT = cpu_count()
+except ImportError:
+    _CPU_COUNT = 1
+
+# Async I/O support
+try:
+    import asyncio
+    import aiofiles
+    _HAS_ASYNC = True
+except ImportError:
+    _HAS_ASYNC = False
+    asyncio = None
+    aiofiles = None
+
 # Core libraries
 import fitz  # PyMuPDF
 import dateparser
@@ -102,7 +134,8 @@ MAX_TEXT_LENGTH = 1_000_000  # Limit text processing for performance
 # Cache configuration
 CACHE_DIR = Path("data/cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
-CACHE_FILE = CACHE_DIR / "processed_resumes.json"
+CACHE_FILE = CACHE_DIR / "processed_resumes.json"  # Legacy JSON cache
+CACHE_JOBLIB_FILE = CACHE_DIR / "processed_resumes.pkl"  # Joblib cache with embeddings
 
 # Pre-compiled regex patterns for efficiency
 EMAIL_PATTERN = re.compile(
@@ -234,23 +267,58 @@ def file_sha256(file_path: Path) -> str:
     return hash_sha256.hexdigest()
 
 def load_cache() -> Dict[str, Any]:
-    """Load cache of processed resumes"""
+    """Load cache of processed resumes (prefers joblib, falls back to JSON)"""
+    # Try joblib cache first (includes embeddings)
+    if _HAS_JOBLIB and CACHE_JOBLIB_FILE.exists():
+        try:
+            cache = joblib.load(CACHE_JOBLIB_FILE)
+            print(f"Loaded cache from joblib: {len(cache)} resumes")
+            return cache
+        except Exception as e:
+            print(f"Error loading joblib cache: {e}")
+    
+    # Fallback to JSON cache (legacy, no embeddings)
     if CACHE_FILE.exists():
         try:
             with open(CACHE_FILE, 'r') as f:
-                return json.load(f)
+                cache = json.load(f)
+                print(f"Loaded cache from JSON: {len(cache)} resumes (no embeddings)")
+                return cache
         except Exception as e:
-            print(f"Error loading cache: {e}")
+            print(f"Error loading JSON cache: {e}")
             return {}
     return {}
 
 def save_cache(cache: Dict[str, Any]):
-    """Save cache of processed resumes"""
+    """Save cache of processed resumes (uses joblib for efficiency)"""
+    # Save with joblib for fast serialization with embeddings
+    if _HAS_JOBLIB:
+        try:
+            joblib.dump(cache, CACHE_JOBLIB_FILE, compress=3)
+            print(f"Saved cache with joblib: {len(cache)} resumes")
+        except Exception as e:
+            print(f"Error saving joblib cache: {e}")
+    
+    # Also save JSON for backward compatibility (without embeddings)
     try:
+        # Remove embeddings from JSON cache to keep it lightweight
+        json_cache = {}
+        for resume_id, data in cache.items():
+            json_data = data.copy()
+            if 'chunks' in json_data:
+                del json_data['chunks']
+            if 'chunk_metadata' in json_data:
+                # Remove embedding data from metadata
+                json_data['chunk_metadata'] = [
+                    {k: v for k, v in meta.items() if k != 'embedding'}
+                    for meta in json_data['chunk_metadata']
+                ]
+            json_cache[resume_id] = json_data
+        
         with open(CACHE_FILE, 'w') as f:
-            json.dump(cache, f, indent=2)
+            json.dump(json_cache, f, indent=2)
     except Exception as e:
-        print(f"Error saving cache: {e}")
+        print(f"Error saving JSON cache: {e}")
 
 def is_resume_cached(resume_id: str, file_path: Path, cache: Dict[str, Any]) -> bool:
     """Check if resume is already cached and file hasn't changed"""
@@ -271,13 +339,15 @@ def get_cached_resume(resume_id: str, cache: Dict[str, Any]) -> Optional[Dict[st
 def cache_resume(resume_id: str, file_path: Path, chunks: List[str], 
                  chunk_metadata: List[Dict[str, Any]], document_record: Dict[str, Any], 
                  cache: Dict[str, Any]):
-    """Cache processed resume data"""
+    """Cache processed resume data with complete chunks and embeddings"""
     cache[resume_id] = {
         'resume_id': resume_id,
         'resume_name': file_path.name,
         'file_path': str(file_path),
         'file_modified': file_path.stat().st_mtime,
         'chunk_count': len(chunks),
+        'chunks': chunks,  # Store actual chunks for instant retrieval
+        'chunk_metadata': chunk_metadata,  # Store metadata with embeddings
         'document_record': document_record,
         'processing_timestamp': time.time()
     }
@@ -1266,7 +1336,17 @@ def calculate_semantic_similarity(text1: str, text2: str) -> float:
     return 0.0
 
 def extract_semantic_chunks(text: str, chunk_size: int = 512, overlap: int = 50) -> List[Dict[str, Any]]:
-    """Extract semantically meaningful chunks with embeddings"""
+    """
+    Extract semantically meaningful chunks with embeddings using batch processing
+    
+    Args:
+        text: Text to chunk
+        chunk_size: Target chunk size in words
+        overlap: Overlap size in words
+    
+    Returns:
+        List of chunk dictionaries with text, metadata, and embeddings
+    """
     chunks = []
     
     # Split text into sentences first
@@ -1274,6 +1354,7 @@ def extract_semantic_chunks(text: str, chunk_size: int = 512, overlap: int = 50)
     
     current_chunk = []
     current_length = 0
+    chunk_texts = []  # Collect all chunk texts for batch embedding
     
     for sentence in sentences:
         sentence = sentence.strip()
@@ -1291,15 +1372,8 @@ def extract_semantic_chunks(text: str, chunk_size: int = 512, overlap: int = 50)
                 "sentence_count": len(current_chunk)
             }
             
-            # Add embeddings if available
-            if _HAS_SENTENCE_TRANSFORMERS and _SENTENCE_MODEL:
-                try:
-                    embedding = _SENTENCE_MODEL.encode(chunk_text)
-                    chunk_info["embedding"] = embedding.tolist()
-                except:
-                    pass
-            
             chunks.append(chunk_info)
+            chunk_texts.append(chunk_text)
             
             # Handle overlap
             overlap_sentences = current_chunk[-overlap//50:] if overlap > 0 else []
@@ -1318,62 +1392,106 @@ def extract_semantic_chunks(text: str, chunk_size: int = 512, overlap: int = 50)
             "sentence_count": len(current_chunk)
         }
         
-        if _HAS_SENTENCE_TRANSFORMERS and _SENTENCE_MODEL:
-            try:
-                embedding = _SENTENCE_MODEL.encode(chunk_text)
-                chunk_info["embedding"] = embedding.tolist()
-            except:
-                pass
-        
         chunks.append(chunk_info)
+        chunk_texts.append(chunk_text)
+    
+    # Batch embed all chunks at once for better performance
+    if _HAS_SENTENCE_TRANSFORMERS and _SENTENCE_MODEL and chunk_texts:
+        try:
+            # Encode all chunks in one batch call (much faster than one-by-one)
+            batch_embeddings = _SENTENCE_MODEL.encode(
+                chunk_texts,
+                batch_size=64,  # Process 64 chunks at a time
+                show_progress_bar=False,
+                convert_to_numpy=True
+            )
+            
+            # Assign embeddings to chunks
+            for i, embedding in enumerate(batch_embeddings):
+                if i < len(chunks):
+                    chunks[i]["embedding"] = embedding.tolist()
+        except Exception as e:
+            print(f"Warning: Batch embedding failed: {e}")
     
     return chunks
 
-# ---------- Main Processing Function ----------
-def process_documents_with_pymupdf(file_paths: List[Path]) -> Tuple[List[str], List[Dict[str, Any]], List[Dict[str, Any]]]:
+# ---------- Single File Processing (for parallel execution) ----------
+async def async_read_file_bytes(file_path: Path) -> bytes:
     """
-    Process documents using PyMuPDF with comprehensive information extraction and caching
+    Asynchronously read file bytes for non-blocking I/O
+    
+    Args:
+        file_path: Path to the file
+    
+    Returns:
+        File content as bytes
+    """
+    if _HAS_ASYNC:
+        async with aiofiles.open(file_path, 'rb') as f:
+            return await f.read()
+    else:
+        # Fallback to synchronous read
+        with open(file_path, 'rb') as f:
+            return f.read()
+
+async def async_process_file_batch(file_paths: List[Path], cache: Dict[str, Any]) -> List[Optional[Tuple]]:
+    """
+    Asynchronously process a batch of files with non-blocking I/O
     
     Args:
         file_paths: List of file paths to process
-        
+        cache: Cache dictionary
+    
     Returns:
-        tuple: (chunks, chunk_metadata, document_records)
+        List of results from processing each file
     """
+    # Read all files asynchronously
+    tasks = [async_read_file_bytes(fp) for fp in file_paths]
+    file_contents = await asyncio.gather(*tasks)
     
-    file_paths = [p for p in file_paths if p.suffix.lower() in ALLOWED_EXTENSIONS]
-    if not file_paths:
-        return [], [], []
+    # Process files (CPU-bound operations still synchronous)
+    results = []
+    for file_path, content in zip(file_paths, file_contents):
+        # Process the file using the content we just read
+        result = process_single_file(file_path, cache)
+        results.append(result)
     
-    chunks = []
-    chunk_metadata = []
-    document_records = []
+    return results
+
+def process_single_file(file_path: Path, cache: Dict[str, Any]) -> Optional[Tuple[str, List[str], List[Dict[str, Any]], Dict[str, Any]]]:
+    """
+    Process a single resume file (used for parallel processing)
     
-    # Load cache
-    cache = load_cache()
-    cache_updated = False
+    Args:
+        file_path: Path to the file
+        cache: Cache dictionary
     
-    for file_path in file_paths:
-        if not file_path.exists():
-            continue
-        
-        # Generate unique resume ID using file hash
-        resume_id = file_sha256(file_path)
-        resume_name = file_path.name
-        
-        # Check cache first
-        if is_resume_cached(resume_id, file_path, cache):
-            print(f"Loading from cache: {file_path.name}")
-            cached_data = get_cached_resume(resume_id, cache)
-            if cached_data:
-                # For cached resumes, we still need to reprocess to get chunks
-                # but we can skip some expensive operations
-                print(f"  (Cache hit, but reprocessing for compatibility)")
-                # Continue with normal processing
-        else:
-            print(f"Processing: {file_path.name}")
-        
-        # Extract content based on file type
+    Returns:
+        Tuple of (resume_id, chunks, chunk_metadata, document_record) or None if cached/failed
+    """
+    if not file_path.exists():
+        return None
+    
+    # Generate unique resume ID using file hash
+    resume_id = file_sha256(file_path)
+    resume_name = file_path.name
+    
+    # Check cache first
+    if is_resume_cached(resume_id, file_path, cache):
+        print(f"✓ [Cached] {file_path.name}")
+        cached_data = get_cached_resume(resume_id, cache)
+        if cached_data and 'chunks' in cached_data and 'chunk_metadata' in cached_data:
+            return (
+                resume_id,
+                cached_data['chunks'],
+                cached_data['chunk_metadata'],
+                cached_data['document_record']
+            )
+    
+    print(f"⚙ [Processing] {file_path.name}")
+    
+    # Extract content based on file type
+    try:
         if file_path.suffix.lower() == ".pdf":
             full_text, urls, pdf_metadata = extract_pdf_with_pymupdf(file_path)
             hyperlinks_data = pdf_metadata.get('hyperlinks', {})
@@ -1382,11 +1500,11 @@ def process_documents_with_pymupdf(file_paths: List[Path]) -> Tuple[List[str], L
             pdf_metadata = {}
             hyperlinks_data = {}
         else:
-            continue
+            return None
         
         if not full_text.strip():
-            print(f"No text extracted from {file_path.name}")
-            continue
+            print(f"⚠ No text extracted from {file_path.name}")
+            return None
         
         # Extract comprehensive entities with hyperlink data
         entities = extract_comprehensive_entities(full_text, hyperlinks_data)
@@ -1407,6 +1525,9 @@ def process_documents_with_pymupdf(file_paths: List[Path]) -> Tuple[List[str], L
         # Create semantic chunks
         semantic_chunks = extract_semantic_chunks(full_text)
         
+        chunks = []
+        chunk_metadata = []
+        
         # Process each chunk
         for i, chunk_info in enumerate(semantic_chunks):
             chunk_text = chunk_info["text"]
@@ -1418,7 +1539,7 @@ def process_documents_with_pymupdf(file_paths: List[Path]) -> Tuple[List[str], L
             chunk_meta = {
                 "resume_id": resume_id,
                 "resume_name": resume_name,
-                "candidate_name": candidate_name,  # Add candidate name
+                "candidate_name": candidate_name,
                 "file": file_path.name,
                 "path": str(file_path),
                 "chunk_index": i,
@@ -1441,10 +1562,10 @@ def process_documents_with_pymupdf(file_paths: List[Path]) -> Tuple[List[str], L
         document_record = {
             "resume_id": resume_id,
             "resume_name": resume_name,
-            "candidate_name": candidate_name,  # Add candidate name
+            "candidate_name": candidate_name,
             "file": file_path.name,
             "path": str(file_path),
-            "file_hash": resume_id,  # Same as resume_id for consistency
+            "file_hash": resume_id,
             "file_size": file_path.stat().st_size,
             "total_chunks": len(semantic_chunks),
             "entities": entities,
@@ -1453,21 +1574,123 @@ def process_documents_with_pymupdf(file_paths: List[Path]) -> Tuple[List[str], L
             "processing_timestamp": time.time(),
         }
         
-        document_records.append(document_record)
+        return (resume_id, chunks, chunk_metadata, document_record)
+    
+    except Exception as e:
+        print(f"✗ Error processing {file_path.name}: {e}")
+        return None
+
+# ---------- Main Processing Function ----------
+def process_documents_with_pymupdf(
+    file_paths: List[Path], 
+    use_parallel: bool = True, 
+    n_jobs: int = -1,
+    use_async_io: bool = True
+) -> Tuple[List[str], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Process documents using PyMuPDF with comprehensive information extraction, caching, parallel processing, and async I/O
+    
+    Args:
+        file_paths: List of file paths to process
+        use_parallel: Whether to use parallel processing (default: True)
+        n_jobs: Number of parallel jobs (-1 for all CPUs, default: -1)
+        use_async_io: Whether to use async I/O for file reading (default: True)
         
-        # Cache the processed resume
-        current_chunks_for_file = chunks[-len(semantic_chunks):] if semantic_chunks else []
-        current_metadata_for_file = chunk_metadata[-len(semantic_chunks):] if semantic_chunks else []
-        cache_resume(resume_id, file_path, current_chunks_for_file, 
-                    current_metadata_for_file, document_record, cache)
-        cache_updated = True
+    Returns:
+        tuple: (chunks, chunk_metadata, document_records)
+    """
+    
+    file_paths = [p for p in file_paths if p.suffix.lower() in ALLOWED_EXTENSIONS]
+    if not file_paths:
+        return [], [], []
+    
+    chunks = []
+    chunk_metadata = []
+    document_records = []
+    
+    # Load cache
+    cache = load_cache()
+    cache_updated = False
+    
+    # Determine if parallel processing should be used
+    use_parallel = use_parallel and _HAS_JOBLIB and len(file_paths) > 1
+    
+    # Async I/O mode (for large number of files)
+    if use_async_io and _HAS_ASYNC and len(file_paths) > 5:
+        print(f"Processing {len(file_paths)} files with async I/O...")
+        
+        # Run async batch processing
+        if asyncio.get_event_loop().is_running():
+            # If already in an event loop, create a new one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            results = loop.run_until_complete(async_process_file_batch(file_paths, cache))
+            loop.close()
+        else:
+            results = asyncio.run(async_process_file_batch(file_paths, cache))
+        
+        # Collect results
+        for result in results:
+            if result is not None:
+                resume_id, file_chunks, file_metadata, document_record = result
+                chunks.extend(file_chunks)
+                chunk_metadata.extend(file_metadata)
+                document_records.append(document_record)
+                
+                # Update cache
+                cache_resume(resume_id, Path(document_record['path']), 
+                           file_chunks, file_metadata, document_record, cache)
+                cache_updated = True
+    
+    elif use_parallel:
+        # Parallel processing mode
+        # Calculate number of jobs
+        if n_jobs == -1:
+            n_jobs = min(_CPU_COUNT, len(file_paths))
+        else:
+            n_jobs = min(n_jobs, len(file_paths))
+        
+        print(f"Processing {len(file_paths)} files in parallel using {n_jobs} workers...")
+        
+        # Process files in parallel
+        results = Parallel(n_jobs=n_jobs, backend='loky', verbose=0)(
+            delayed(process_single_file)(file_path, cache) for file_path in file_paths
+        )
+        
+        # Collect results
+        for result in results:
+            if result is not None:
+                resume_id, file_chunks, file_metadata, document_record = result
+                chunks.extend(file_chunks)
+                chunk_metadata.extend(file_metadata)
+                document_records.append(document_record)
+                
+                # Update cache
+                cache_resume(resume_id, Path(document_record['path']), 
+                           file_chunks, file_metadata, document_record, cache)
+                cache_updated = True
+    else:
+        # Sequential processing (fallback or single file)
+        print(f"Processing {len(file_paths)} files sequentially...")
+        
+        for file_path in file_paths:
+            result = process_single_file(file_path, cache)
+            if result is not None:
+                resume_id, file_chunks, file_metadata, document_record = result
+                chunks.extend(file_chunks)
+                chunk_metadata.extend(file_metadata)
+                document_records.append(document_record)
+                
+                # Update cache
+                cache_resume(resume_id, file_path, file_chunks, file_metadata, document_record, cache)
+                cache_updated = True
     
     # Save cache if updated
     if cache_updated:
         save_cache(cache)
-        print(f"Cache updated with {len(document_records)} resume(s)")
+        print(f"✓ Cache updated with {len(document_records)} resume(s)")
     
-    print(f"Processed {len(document_records)} documents into {len(chunks)} chunks")
+    print(f"✓ Processed {len(document_records)} documents into {len(chunks)} chunks")
     return chunks, chunk_metadata, document_records
 
 # ---------- Export Function for Compatibility ----------
