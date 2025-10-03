@@ -100,23 +100,12 @@ with st.sidebar:
             st.caption(f"{len(resume_list)} unique candidates indexed")
             
             # Display candidate names in the sidebar
-            with st.expander("View Candidates", expanded=False):
+            with st.expander("Uploaded Resumes", expanded=False):
                 for idx, resume_info in enumerate(resume_list, 1):
                     candidate_name = resume_info.get('candidate_name', 'Unknown')
                     resume_name = resume_info.get('resume_name', 'Unknown')
-                    
-                    if candidate_name != resume_name:
-                        st.write(f"{idx}. **{candidate_name}** ({resume_name})")
-                    else:
-                        st.write(f"{idx}. {resume_name}")
 
-    
-    if files:
-        with st.expander("Files", expanded=False):
-            for p in files[:20]:
-                st.write(f"• {p.name} — {human_size(p.stat().st_size)}")
-        if len(files) > 20:
-            st.caption(f"...and {len(files)-20} more")
+                    st.write(f"{idx}. **{candidate_name}** ({resume_name})")
 
     # Single-click Clear Session - resets everything immediately
     if st.button("Clear Session", use_container_width=True, type="primary"):

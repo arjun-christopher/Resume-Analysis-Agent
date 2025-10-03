@@ -731,6 +731,118 @@ def extract_dates(text: str) -> List[Dict[str, str]]:
     
     return dates
 
+def format_candidate_name(name: str) -> str:
+    """
+    Format candidate name with proper capitalization, handling initials and special cases
+    
+    Examples:
+        "ARJUN CHRISTOPHER" -> "Arjun Christopher"
+        "arjun christopher" -> "Arjun Christopher"
+        "JOHN SMITH JR" -> "John Smith Jr"
+        "A.R.RAHMAN" -> "A.R. Rahman"
+        "MC DONALD" -> "Mc Donald"
+        "O'BRIEN" -> "O'Brien"
+        "Jean-Paul SARTRE" -> "Jean Paul Sartre" (hyphen removed)
+        "arjun_christopher" -> "Arjun Christopher" (underscore removed)
+    """
+    if not name or not isinstance(name, str):
+        return name
+    
+    # First, replace hyphens and underscores with spaces
+    name = name.replace('-', ' ').replace('_', ' ')
+    
+    # Clean up extra whitespace
+    name = ' '.join(name.split())
+    
+    # Handle edge case: initials stuck to name like "A.R.RAHMAN" -> "A.R. RAHMAN"
+    # But preserve "A.R." together as one unit
+    # Look for pattern where multiple dots exist followed by uppercase letters
+    name = re.sub(r'([A-Z]\.[A-Z]\.?)([A-Z][A-Za-z]+)', r'\1 \2', name)
+    
+    def format_word(word: str) -> str:
+        """Format a single word with proper capitalization"""
+        if not word:
+            return word
+        
+        # Handle initials (single letter or letter with period)
+        if len(word) <= 2 and word[0].isalpha():
+            # Single letter initial or "A." format
+            if len(word) == 1:
+                return word.upper() + '.'
+            elif len(word) == 2 and word[1] == '.':
+                return word[0].upper() + '.'
+        
+        # Handle initials with dots (e.g., "A.R." or "A.R" or "a.r.rahman" or "DR.")
+        if '.' in word:
+            # Check if it's a title like "Dr." or suffix
+            word_lower = word.lower().rstrip('.')
+            title_suffix_patterns = {
+                'jr': 'Jr', 'sr': 'Sr', 
+                'ii': 'II', 'iii': 'III', 'iv': 'IV', 'v': 'V',
+                'phd': 'PhD', 'md': 'MD', 'esq': 'Esq',
+                'dds': 'DDS', 'jd': 'JD', 'dr': 'Dr', 'mr': 'Mr',
+                'mrs': 'Mrs', 'ms': 'Ms', 'prof': 'Prof'
+            }
+            if word_lower in title_suffix_patterns:
+                return title_suffix_patterns[word_lower] + '.'
+            
+            # Handle multi-part initials like "A.R." or "a.r.something"
+            parts = word.split('.')
+            formatted_parts = []
+            for i, p in enumerate(parts):
+                if not p:  # Empty part (from consecutive dots or trailing dot)
+                    continue
+                if len(p) == 1 and p.isalpha():
+                    # Single letter - make it uppercase (initial)
+                    formatted_parts.append(p.upper())
+                elif len(p) == 2 and p.isalpha():
+                    # Two letters together like "AR" in "A.R.NAME"
+                    formatted_parts.append(p.upper())
+                else:
+                    # Regular word part
+                    formatted_parts.append(p.capitalize())
+            
+            result = '.'.join(formatted_parts)
+            # Add trailing period if original had it and result doesn't
+            if word.endswith('.') and not result.endswith('.'):
+                result += '.'
+            return result
+        
+        # Handle apostrophes (e.g., "O'Brien", "D'Angelo")
+        if "'" in word:
+            parts = word.split("'")
+            if len(parts) == 2 and len(parts[0]) <= 2:
+                # Handles O'Brien, D'Angelo
+                return parts[0].capitalize() + "'" + parts[1].capitalize()
+            return "'".join(part.capitalize() for part in parts)
+        
+        # Handle Mc/Mac prefixes (e.g., "McDonald", "MacLeod")
+        if word.lower().startswith('mc') and len(word) > 2:
+            return 'Mc' + word[2:].capitalize()
+        
+        # For "MacDonald" as single word, just capitalize normally
+        if word.lower().startswith('mac') and len(word) > 3:
+            return word.capitalize()
+        
+        # Handle common suffixes (Jr, Sr, II, III, IV, PhD, MD, etc.) without dots
+        suffix_patterns = {
+            'jr': 'Jr', 'sr': 'Sr', 
+            'ii': 'II', 'iii': 'III', 'iv': 'IV', 'v': 'V',
+            'phd': 'PhD', 'md': 'MD', 'esq': 'Esq',
+            'dds': 'DDS', 'jd': 'JD', 'dr': 'Dr'
+        }
+        if word.lower() in suffix_patterns:
+            return suffix_patterns[word.lower()]
+        
+        # Standard capitalization for regular words
+        return word.capitalize()
+    
+    # Split name into words and format each
+    words = name.split()
+    formatted_words = [format_word(word) for word in words]
+    
+    return ' '.join(formatted_words)
+
 def extract_names_advanced(text: str) -> List[str]:
     """Advanced name extraction using multiple strategies with confidence scoring"""
     candidate_names = {}  # Store names with confidence scores
@@ -919,8 +1031,8 @@ def extract_names_advanced(text: str) -> List[str]:
     # Sort by confidence and return top names
     sorted_names = sorted(candidate_names.items(), key=lambda x: x[1], reverse=True)
     
-    # Return names with confidence > threshold
-    result = [name for name, conf in sorted_names if conf > 20]
+    # Return names with confidence > threshold, formatted properly
+    result = [format_candidate_name(name) for name, conf in sorted_names if conf > 20]
     
     # If we found names, return top 3 max; if none, return empty list
     return result[:3] if result else []
@@ -1285,11 +1397,12 @@ def process_documents_with_pymupdf(file_paths: List[Path]) -> Tuple[List[str], L
         
         # If no name found through advanced extraction, try to get from entities
         if not candidate_name and entities.get('names'):
-            candidate_name = entities['names'][0]
+            candidate_name = format_candidate_name(entities['names'][0])
         
-        # Fallback: Use filename (remove extension and clean)
+        # Fallback: Use filename (remove extension and clean) with proper formatting
         if not candidate_name:
-            candidate_name = file_path.stem.replace('_', ' ').replace('-', ' ').title()
+            filename_name = file_path.stem.replace('_', ' ').replace('-', ' ')
+            candidate_name = format_candidate_name(filename_name)
         
         # Create semantic chunks
         semantic_chunks = extract_semantic_chunks(full_text)
