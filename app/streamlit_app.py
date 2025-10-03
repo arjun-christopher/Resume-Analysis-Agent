@@ -1,8 +1,19 @@
 # app/streamlit_app.py - Focused UI: Upload (auto-index) + Chat
 from __future__ import annotations
+
+# Fix for Ray workers: Ensure local modules can be imported
+import sys
 import os
-import time
 from pathlib import Path
+
+# Add project root to PYTHONPATH for Ray workers
+project_root = Path(__file__).parent.parent.absolute()
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+# Also set PYTHONPATH environment variable for subprocesses
+os.environ['PYTHONPATH'] = f"{project_root}:{os.environ.get('PYTHONPATH', '')}"
+
+import time
 from typing import List, Dict, Any
 
 import streamlit as st
