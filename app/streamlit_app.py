@@ -25,6 +25,10 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 INDEX_DIR = DATA_DIR / "index"
 INDEX_DIR.mkdir(parents=True, exist_ok=True)
 
+# File limits for indexing
+MAX_FILES_PER_SESSION = 5
+MAX_FILES_PER_BATCH = 5
+
 if "agent" not in st.session_state:
     st.session_state.agent = create_advanced_rag_engine(str(INDEX_DIR))
 if "manifest" not in st.session_state:
@@ -49,43 +53,71 @@ st.title("Resume Analysis Agent")
 # ---- Sidebar (upload only PDFs & DOC/DOCX) ----
 with st.sidebar:
     st.header("Upload Resumes")
+    
+    # Display file limit warning
+    current_file_count = len(st.session_state.indexed_files)
+    files_remaining = MAX_FILES_PER_SESSION - current_file_count
+    
+    if files_remaining > 0:
+        st.info(f"Session limit: {current_file_count}/{MAX_FILES_PER_SESSION} files indexed | {files_remaining} remaining")
+    else:
+        st.warning(f"Session limit reached: {MAX_FILES_PER_SESSION}/{MAX_FILES_PER_SESSION} files indexed")
+        st.caption("Clear session to upload new files")
+    
     uploaded = st.file_uploader(
         "Drop PDF or Word files here", type=["pdf","doc","docx"], accept_multiple_files=True,
-        help="Only PDFs and Word documents are supported",
-        key=f"file_uploader_{st.session_state.uploader_key}"
+        help=f"Maximum {MAX_FILES_PER_SESSION} files per session. Only PDFs and Word documents are supported.",
+        key=f"file_uploader_{st.session_state.uploader_key}",
+        disabled=(files_remaining <= 0)
     )
 
     if uploaded:
-        start = time.time()
-        saved_files = []
-        new_files = []
+        # Check if adding these files would exceed the session limit
+        current_count = len(st.session_state.indexed_files)
+        new_file_names = [uf.name for uf in uploaded if uf.name not in st.session_state.indexed_files]
         
-        for uf in uploaded:
-            dest = UPLOAD_DIR / uf.name
-            dest.write_bytes(uf.read())
-            saved_files.append(dest)
-            
-            # Check if this file is new (not already indexed)
-            if uf.name not in st.session_state.indexed_files:
-                new_files.append(dest)
-                st.session_state.indexed_files.add(uf.name)
-
-        # Only index new files
-        if new_files:
-            with st.spinner(f"Indexing {len(new_files)} new file(s)..."):
-                chunks, metas, records = extract_docs_to_chunks_and_records(new_files)
-                
-                if chunks:
-                    # Convert to the format expected by fast semantic RAG
-                    documents = [chunk.page_content if hasattr(chunk, 'page_content') else str(chunk) for chunk in chunks]
-                    metadata = [meta for meta in metas]
-                    
-                    st.session_state.agent.add_documents(documents, metadata)
-            
-            processing_time = time.time() - start
-            st.success(f"Indexed {len(new_files)} new file(s) in {processing_time:.2f}s")
+        if current_count + len(new_file_names) > MAX_FILES_PER_SESSION:
+            allowed_count = MAX_FILES_PER_SESSION - current_count
+            st.error(f"Cannot upload {len(new_file_names)} file(s). Session limit: {MAX_FILES_PER_SESSION} files maximum.")
+            st.error(f"You can only add {allowed_count} more file(s). Currently indexed: {current_count}/{MAX_FILES_PER_SESSION}")
+            st.info("Click 'Clear Session' to reset and upload new files.")
         else:
-            st.info(f"All {len(saved_files)} file(s) already indexed, skipping re-indexing")
+            start = time.time()
+            saved_files = []
+            new_files = []
+            
+            # Enforce per-batch limit
+            files_to_process = uploaded[:MAX_FILES_PER_BATCH]
+            if len(uploaded) > MAX_FILES_PER_BATCH:
+                st.warning(f"Processing only first {MAX_FILES_PER_BATCH} files in this batch.")
+            
+            for uf in files_to_process:
+                dest = UPLOAD_DIR / uf.name
+                dest.write_bytes(uf.read())
+                saved_files.append(dest)
+                
+                # Check if this file is new (not already indexed)
+                if uf.name not in st.session_state.indexed_files:
+                    new_files.append(dest)
+                    st.session_state.indexed_files.add(uf.name)
+
+            # Only index new files
+            if new_files:
+                with st.spinner(f"Indexing {len(new_files)} new file(s)..."):
+                    chunks, metas, records = extract_docs_to_chunks_and_records(new_files)
+                    
+                    if chunks:
+                        # Convert to the format expected by fast semantic RAG
+                        documents = [chunk.page_content if hasattr(chunk, 'page_content') else str(chunk) for chunk in chunks]
+                        metadata = [meta for meta in metas]
+                        
+                        st.session_state.agent.add_documents(documents, metadata)
+                
+                processing_time = time.time() - start
+                st.success(f"✅ Indexed {len(new_files)} new file(s) in {processing_time:.2f}s")
+                st.info(f"Total: {len(st.session_state.indexed_files)}/{MAX_FILES_PER_SESSION} files in session")
+            else:
+                st.info(f"All {len(saved_files)} file(s) already indexed, skipping re-indexing")
 
     st.markdown("---")
     files = list_supported_files(UPLOAD_DIR)

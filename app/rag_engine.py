@@ -104,6 +104,12 @@ except ImportError:
     _HAS_HUGGINGFACE = False
 
 try:
+    from sentence_transformers import CrossEncoder
+    _HAS_CROSS_ENCODER = True
+except ImportError:
+    _HAS_CROSS_ENCODER = False
+
+try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
@@ -111,6 +117,184 @@ except ImportError:
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# QUERY EXPANSION & ENHANCEMENT
+# ============================================================================
+
+class QueryExpander:
+    """Expand queries with synonyms and related terms for better retrieval"""
+    
+    # Domain-specific synonyms for resume queries
+    SYNONYMS = {
+        'experience': ['work', 'employment', 'job', 'position', 'role', 'career'],
+        'skills': ['abilities', 'competencies', 'expertise', 'proficiency', 'capabilities'],
+        'education': ['academic', 'degree', 'qualification', 'university', 'college', 'study'],
+        'projects': ['work', 'assignments', 'initiatives', 'portfolio'],
+        'certifications': ['certificates', 'licenses', 'credentials', 'qualifications'],
+        'achievements': ['accomplishments', 'awards', 'recognition', 'honors'],
+        'python': ['py', 'python3', 'python2', 'python programming'],
+        'javascript': ['js', 'ecmascript', 'node', 'nodejs', 'javascript programming'],
+        'machine learning': ['ml', 'deep learning', 'ai', 'artificial intelligence', 'neural networks'],
+        'data science': ['data analytics', 'data analysis', 'big data', 'analytics'],
+        'full stack': ['fullstack', 'full-stack', 'frontend and backend'],
+        'frontend': ['front-end', 'front end', 'ui', 'user interface', 'client-side'],
+        'backend': ['back-end', 'back end', 'server-side', 'server'],
+        'devops': ['dev ops', 'sre', 'infrastructure', 'ci/cd'],
+        'cloud': ['aws', 'azure', 'gcp', 'google cloud', 'cloud computing'],
+        'database': ['db', 'sql', 'nosql', 'data storage', 'rdbms'],
+        'agile': ['scrum', 'kanban', 'sprint', 'iterative development'],
+        'leadership': ['management', 'lead', 'manage', 'supervise', 'team lead'],
+        'years': ['yrs', 'year', 'experience'],
+        'bachelor': ['bachelors', 'bs', 'ba', 'undergraduate'],
+        'master': ['masters', 'ms', 'ma', 'graduate', 'postgraduate'],
+        'phd': ['ph.d', 'doctorate', 'doctoral'],
+    }
+    
+    # Technical variations
+    TECH_VARIATIONS = {
+        'react': ['reactjs', 'react.js'],
+        'angular': ['angularjs', 'angular.js'],
+        'vue': ['vuejs', 'vue.js'],
+        'node': ['nodejs', 'node.js'],
+        'typescript': ['ts'],
+        'docker': ['containerization', 'containers'],
+        'kubernetes': ['k8s'],
+        'tensorflow': ['tf'],
+        'pytorch': ['torch'],
+    }
+    
+    @classmethod
+    def expand_query(cls, query: str, max_expansions: int = 3) -> List[str]:
+        """
+        Expand query with synonyms and variations
+        
+        Args:
+            query: Original query
+            max_expansions: Maximum number of expanded queries to generate
+            
+        Returns:
+            List of query variations including original
+        """
+        query_lower = query.lower()
+        expanded = [query]  # Always include original
+        
+        # Find matching terms
+        matched_terms = {}
+        for key, synonyms in {**cls.SYNONYMS, **cls.TECH_VARIATIONS}.items():
+            if key in query_lower:
+                matched_terms[key] = synonyms
+        
+        # Generate variations
+        if matched_terms:
+            # Strategy 1: Replace one term at a time
+            for key, synonyms in list(matched_terms.items())[:max_expansions]:
+                for synonym in synonyms[:2]:  # Use top 2 synonyms
+                    # Case-insensitive replacement
+                    import re
+                    pattern = re.compile(re.escape(key), re.IGNORECASE)
+                    expanded_query = pattern.sub(synonym, query, count=1)
+                    if expanded_query != query and expanded_query not in expanded:
+                        expanded.append(expanded_query)
+                        if len(expanded) >= max_expansions + 1:
+                            break
+                if len(expanded) >= max_expansions + 1:
+                    break
+        
+        return expanded[:max_expansions + 1]
+    
+    @classmethod
+    def classify_query_type(cls, query: str) -> str:
+        """
+        Classify query type for specialized retrieval
+        
+        Returns:
+            'exact_match' | 'semantic' | 'hybrid' | 'comparison' | 'aggregation'
+        """
+        query_lower = query.lower()
+        
+        # Exact match queries (specific years, numbers, names)
+        if any(keyword in query_lower for keyword in ['how many years', 'specific', 'exactly', 'in year']):
+            return 'exact_match'
+        
+        # Comparison queries
+        if any(keyword in query_lower for keyword in ['compare', 'best', 'top', 'rank', 'versus', 'vs', 'better']):
+            return 'comparison'
+        
+        # Aggregation queries
+        if any(keyword in query_lower for keyword in ['all candidates', 'everyone', 'list all', 'total', 'count', 'how many']):
+            return 'aggregation'
+        
+        # Check for technical terms (prefer semantic)
+        technical_terms = ['python', 'java', 'react', 'machine learning', 'aws', 'cloud', 'docker']
+        if any(term in query_lower for term in technical_terms):
+            return 'semantic'
+        
+        # Default: hybrid
+        return 'hybrid'
+
+
+class CrossEncoderReranker:
+    """Rerank retrieved documents using cross-encoder for better accuracy"""
+    
+    def __init__(self, model_name: str = 'cross-encoder/ms-marco-MiniLM-L-6-v2'):
+        self.model = None
+        self.model_name = model_name
+        if _HAS_CROSS_ENCODER:
+            try:
+                self.model = CrossEncoder(model_name)
+                logger.info(f"✅ Loaded cross-encoder reranker: {model_name}")
+            except Exception as e:
+                logger.warning(f"Failed to load cross-encoder: {e}")
+    
+    def rerank(
+        self, 
+        query: str, 
+        documents: List[Tuple[str, Dict[str, Any], float]], 
+        top_k: int = None
+    ) -> List[Tuple[str, Dict[str, Any], float]]:
+        """
+        Rerank documents using cross-encoder
+        
+        Args:
+            query: User query
+            documents: List of (text, metadata, score) tuples
+            top_k: Number of top documents to return (None = return all)
+            
+        Returns:
+            Reranked list of documents with updated scores
+        """
+        if not self.model or not documents:
+            return documents
+        
+        try:
+            # Prepare pairs for cross-encoder
+            pairs = [[query, doc[0]] for doc in documents]
+            
+            # Get cross-encoder scores
+            scores = self.model.predict(pairs)
+            
+            # Combine with original documents
+            reranked = []
+            for i, (text, metadata, original_score) in enumerate(documents):
+                # Use cross-encoder score as primary, keep original as secondary
+                reranked.append((
+                    text, 
+                    metadata, 
+                    float(scores[i])  # Cross-encoder score
+                ))
+            
+            # Sort by cross-encoder score
+            reranked.sort(key=lambda x: x[2], reverse=True)
+            
+            # Return top_k if specified
+            if top_k:
+                return reranked[:top_k]
+            return reranked
+            
+        except Exception as e:
+            logger.warning(f"Cross-encoder reranking failed: {e}")
+            return documents
 
 # ============================================================================
 # Google GenAI Wrapper for LangChain Compatibility
@@ -524,10 +708,15 @@ class SectionBasedChunker:
 class HybridSearchEngine:
     """Combines dense (semantic) and sparse (BM25) retrieval with persistent storage"""
     
+    # File limits for indexing
+    MAX_FILES_PER_SESSION = 5
+    MAX_BATCH_SIZE = 5
+    
     def __init__(self, embedding_model: str = "BAAI/bge-small-en-v1.5", storage_path: str = "data/index"):
         self.embedding_model_name = embedding_model
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
+        self.indexed_resume_ids = set()  # Track unique resumes indexed
         
         self.embedder = None
         self.embed_method = None
@@ -630,9 +819,30 @@ class HybridSearchEngine:
             return np.random.random((len(texts), 384)).astype(np.float32)
     
     def add_documents(self, documents: List[str], metadata: List[Dict[str, Any]]):
-        """Add documents to both dense and sparse indices"""
+        """Add documents to both dense and sparse indices with file limit enforcement"""
         if not documents:
             return
+        
+        # Extract unique resume IDs from metadata
+        new_resume_ids = set()
+        for meta in metadata:
+            resume_id = meta.get('resume_id')
+            if resume_id:
+                new_resume_ids.add(resume_id)
+        
+        # Check file limit
+        total_resumes_after_add = len(self.indexed_resume_ids | new_resume_ids)
+        if total_resumes_after_add > self.MAX_FILES_PER_SESSION:
+            allowed_new = self.MAX_FILES_PER_SESSION - len(self.indexed_resume_ids)
+            raise ValueError(
+                f"Cannot add documents. Session limit: {self.MAX_FILES_PER_SESSION} files maximum. "
+                f"Currently indexed: {len(self.indexed_resume_ids)} files. "
+                f"Attempting to add: {len(new_resume_ids)} files. "
+                f"You can only add {allowed_new} more file(s)."
+            )
+        
+        # Update resume tracking
+        self.indexed_resume_ids.update(new_resume_ids)
         
         # Store documents
         self.documents.extend(documents)
@@ -759,11 +969,18 @@ class HybridSearchEngine:
             self.metadata = all_metadata
             self.embeddings = np.array(all_embeddings, dtype=np.float32)
             
+            # Rebuild resume ID tracking
+            self.indexed_resume_ids = set()
+            for meta in all_metadata:
+                resume_id = meta.get('resume_id')
+                if resume_id:
+                    self.indexed_resume_ids.add(resume_id)
+            
             # Rebuild FAISS and BM25 indices
             self._build_faiss_index()
             self._build_bm25_index()
             
-            logger.info(f"✅ Loaded {len(self.documents)} documents from persistent storage")
+            logger.info(f"✅ Loaded {len(self.documents)} documents from persistent storage ({len(self.indexed_resume_ids)} unique resumes)")
         except Exception as e:
             logger.warning(f"Failed to load index: {e}")
     
@@ -779,6 +996,7 @@ class HybridSearchEngine:
         self.faiss_index = None
         self.bm25 = None
         self.tokenized_corpus = []
+        self.indexed_resume_ids = set()  # Clear resume tracking
         
         # Clear Qdrant collection
         if self.qdrant_client:
@@ -824,10 +1042,12 @@ class HybridSearchEngine:
         semantic_weight: float = 0.7,
         bm25_weight: float = 0.3,
         resume_id: Optional[str] = None,
-        resume_name: Optional[str] = None
+        resume_name: Optional[str] = None,
+        use_reranking: bool = True,
+        section_filter: Optional[List[str]] = None
     ) -> List[Tuple[str, Dict[str, Any], float]]:
         """
-        Hybrid search combining semantic and BM25 with optional resume filtering
+        Enhanced hybrid search with query expansion, reranking, and section filtering
         
         Args:
             query: Search query
@@ -836,6 +1056,8 @@ class HybridSearchEngine:
             bm25_weight: Weight for BM25 search (0-1)
             resume_id: Optional resume ID to filter results (for per-resume queries)
             resume_name: Optional resume name to filter results (alternative to resume_id)
+            use_reranking: Whether to use cross-encoder reranking (default: True)
+            section_filter: Optional list of section types to prioritize (e.g., ['experience', 'skills'])
         """
         if not self.documents:
             return []
@@ -845,14 +1067,42 @@ class HybridSearchEngine:
         semantic_weight /= total_weight
         bm25_weight /= total_weight
         
-        # Get semantic search results
-        semantic_results = self._semantic_search(query, k * 2)  # Get more for fusion
+        # ENHANCEMENT 1: Query expansion for better recall
+        expanded_queries = QueryExpander.expand_query(query, max_expansions=2)
         
-        # Get BM25 results
-        bm25_results = self._bm25_search(query, k * 2)
+        # Retrieve results for each query variation
+        all_semantic_results = []
+        all_bm25_results = []
+        
+        for exp_query in expanded_queries:
+            # Get semantic search results
+            semantic_results = self._semantic_search(exp_query, k * 2)
+            all_semantic_results.extend(semantic_results)
+            
+            # Get BM25 results
+            bm25_results = self._bm25_search(exp_query, k * 2)
+            all_bm25_results.extend(bm25_results)
+        
+        # Deduplicate results (keep highest score for each document)
+        semantic_results = self._deduplicate_results(all_semantic_results)[:k * 2]
+        bm25_results = self._deduplicate_results(all_bm25_results)[:k * 2]
         
         # Fuse results using reciprocal rank fusion
         fused_results = self._fuse_results(semantic_results, bm25_results, semantic_weight, bm25_weight)
+        
+        # ENHANCEMENT 2: Section-aware filtering
+        if section_filter:
+            # Boost results from target sections
+            boosted_results = []
+            for text, metadata, score in fused_results:
+                section_type = metadata.get('section_type', '').lower()
+                if section_type in section_filter:
+                    # Boost score by 30% for matching sections
+                    score *= 1.3
+                boosted_results.append((text, metadata, score))
+            # Re-sort after boosting
+            boosted_results.sort(key=lambda x: x[2], reverse=True)
+            fused_results = boosted_results
         
         # Filter by resume if specified
         if resume_id or resume_name:
@@ -865,7 +1115,16 @@ class HybridSearchEngine:
             fused_results = filtered_results
         
         # Return top k
-        return fused_results[:k]
+        results = fused_results[:k * 3]  # Get more for reranking
+        
+        # ENHANCEMENT 3: Cross-encoder reranking for better accuracy
+        if use_reranking and _HAS_CROSS_ENCODER and len(results) > 0:
+            reranker = CrossEncoderReranker()
+            results = reranker.rerank(query, results, top_k=k)
+        else:
+            results = results[:k]
+        
+        return results
     
     def group_results_by_resume(
         self, 
@@ -962,14 +1221,32 @@ class HybridSearchEngine:
         # Return results with documents
         results = []
         for idx, score in sorted_indices:
-            if idx < len(self.documents):
-                results.append((
-                    self.documents[idx],
-                    self.metadata[idx],
-                    score
-                ))
+            if 0 <= idx < len(self.documents):
+                results.append((self.documents[idx], self.metadata[idx], score))
         
         return results
+    
+    def _deduplicate_results(self, results: List[Tuple[int, float]]) -> List[Tuple[int, float]]:
+        """
+        Deduplicate results, keeping highest score for each document index
+        
+        Args:
+            results: List of (index, score) tuples
+            
+        Returns:
+            Deduplicated list sorted by score
+        """
+        # Use dictionary to keep highest score per index
+        best_scores = {}
+        for idx, score in results:
+            if idx not in best_scores or score > best_scores[idx]:
+                best_scores[idx] = score
+        
+        # Convert back to list and sort by score
+        deduplicated = [(idx, score) for idx, score in best_scores.items()]
+        deduplicated.sort(key=lambda x: x[1], reverse=True)
+        
+        return deduplicated
 
 
 # ============================================================================
@@ -1151,7 +1428,7 @@ class AdvancedRAGEngine:
     def query(self, question: str, k: int = 5, resume_id: Optional[str] = None, 
               resume_name: Optional[str] = None, group_by_resume: bool = True) -> Dict[str, Any]:
         """
-        Query with advanced RAG and optional resume filtering/grouping
+        Enhanced query with classification, expansion, and reranking
         
         Args:
             question: User query
@@ -1163,23 +1440,32 @@ class AdvancedRAGEngine:
         start_time = time.time()
         
         try:
-            # Adjust weights based on query type
-            semantic_weight, bm25_weight = self._determine_search_weights(question)
+            # ENHANCEMENT 1: Query Classification
+            query_type = QueryExpander.classify_query_type(question)
+            logger.info(f"Query type detected: {query_type}")
             
             # Detect if query is asking for comparison/ranking across resumes
-            is_comparison_query = self._is_comparison_query(question)
+            is_comparison_query = self._is_comparison_query(question) or query_type == 'comparison'
+            
+            # ENHANCEMENT 2: Adaptive search weights based on query type
+            semantic_weight, bm25_weight = self._determine_search_weights_by_type(question, query_type)
+            
+            # ENHANCEMENT 3: Section filtering based on query content
+            section_filter = self._determine_section_filter(question)
             
             # For comparison queries, get more results to ensure we cover multiple resumes
             search_k = k * 3 if is_comparison_query else k
             
-            # Hybrid search with optional filtering
+            # ENHANCEMENT 4: Hybrid search with query expansion, reranking, and section filtering
             results = self.search_engine.search(
                 question, 
                 k=search_k, 
                 semantic_weight=semantic_weight,
                 bm25_weight=bm25_weight,
                 resume_id=resume_id,
-                resume_name=resume_name
+                resume_name=resume_name,
+                use_reranking=True,  # Enable cross-encoder reranking
+                section_filter=section_filter  # Prioritize relevant sections
             )
             
             if not results:
@@ -1220,8 +1506,10 @@ class AdvancedRAGEngine:
                 'answer': final_answer,
                 'source_documents': source_docs,
                 'processing_time': time.time() - start_time,
-                'method': 'advanced_hybrid_rag',
-                'search_weights': {'semantic': semantic_weight, 'bm25': bm25_weight}
+                'method': 'enhanced_hybrid_rag_v2',
+                'query_type': query_type,
+                'search_weights': {'semantic': semantic_weight, 'bm25': bm25_weight},
+                'enhancements_used': ['query_expansion', 'cross_encoder_reranking', 'section_filtering', 'adaptive_weights']
             }
             
             # Add grouping info if available
@@ -1337,6 +1625,85 @@ class AdvancedRAGEngine:
         
         # Balanced default
         return 0.7, 0.3
+    
+    def _determine_search_weights_by_type(self, question: str, query_type: str) -> Tuple[float, float]:
+        """
+        Enhanced search weight determination using query classification
+        
+        Args:
+            question: User query
+            query_type: Classified query type from QueryExpander
+            
+        Returns:
+            Tuple of (semantic_weight, bm25_weight)
+        """
+        question_lower = question.lower()
+        
+        # Type-based weights
+        if query_type == 'exact_match':
+            # Favor keyword search for exact matches
+            return 0.3, 0.7
+        
+        elif query_type == 'semantic':
+            # Strong semantic focus for conceptual queries
+            return 0.85, 0.15
+        
+        elif query_type == 'comparison':
+            # Balanced for comparison queries
+            return 0.7, 0.3
+        
+        elif query_type == 'aggregation':
+            # Slightly favor BM25 for aggregation/counting
+            return 0.6, 0.4
+        
+        # Hybrid type - refine with keyword indicators
+        keyword_indicators = ['name', 'email', 'phone', 'specific', 'exactly', 'list', 'year', 'date']
+        if any(indicator in question_lower for indicator in keyword_indicators):
+            return 0.4, 0.6  # Favor BM25
+        
+        # Semantic indicators
+        semantic_indicators = ['analyze', 'describe', 'explain', 'how', 'why', 'summarize']
+        if any(indicator in question_lower for indicator in semantic_indicators):
+            return 0.8, 0.2  # Favor semantic
+        
+        # Default balanced
+        return 0.7, 0.3
+    
+    def _determine_section_filter(self, question: str) -> Optional[List[str]]:
+        """
+        Determine which resume sections are most relevant for the query
+        
+        Args:
+            question: User query
+            
+        Returns:
+            List of relevant section types to prioritize, or None for all sections
+        """
+        question_lower = question.lower()
+        
+        # Map keywords to sections
+        section_keywords = {
+            'experience': ['experience', 'work', 'job', 'role', 'position', 'employment', 'worked', 'company'],
+            'skills': ['skill', 'technology', 'programming', 'language', 'framework', 'tool', 'expertise', 'proficiency'],
+            'education': ['education', 'degree', 'university', 'college', 'study', 'academic', 'major', 'graduated'],
+            'projects': ['project', 'built', 'developed', 'created', 'implemented'],
+            'certifications': ['certification', 'certificate', 'license', 'certified', 'credential'],
+            'achievements': ['achievement', 'award', 'recognition', 'accomplishment', 'honor'],
+            'summary': ['summary', 'profile', 'objective', 'about'],
+        }
+        
+        # Find matching sections
+        matched_sections = []
+        for section, keywords in section_keywords.items():
+            if any(keyword in question_lower for keyword in keywords):
+                matched_sections.append(section)
+        
+        # Return None if no specific match (search all sections)
+        # Or if multiple broad sections matched (likely needs all context)
+        if len(matched_sections) == 0 or len(matched_sections) > 3:
+            return None
+        
+        return matched_sections
     
     def _extract_insights(
         self, 
