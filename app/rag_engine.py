@@ -10,7 +10,6 @@ Advanced RAG System with:
 
 from __future__ import annotations
 
-# Fix for Ray workers: Ensure local modules can be imported
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -103,14 +102,6 @@ try:
     load_dotenv()
 except ImportError:
     pass
-
-# Ray for distributed computing
-try:
-    import ray
-    _HAS_RAY = True
-except ImportError:
-    _HAS_RAY = False
-    ray = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1498,128 +1489,6 @@ ANSWER:"""
             'sections_detected': 0
         }
         logger.info("Index cleared")
-    
-    def add_documents_with_ray(
-        self, 
-        documents: List[str], 
-        metadata: List[Dict[str, Any]] = None,
-        use_actors: bool = True,
-        num_actors: int = 2
-    ):
-        """
-        Add documents using Ray for distributed parallel processing
-        
-        Args:
-            documents: List of document texts to process
-            metadata: List of metadata dicts for each document
-            use_actors: If True, use Ray actors; if False, use remote functions
-            num_actors: Number of Ray actors to create
-            
-        Returns:
-            dict: Processing statistics
-        """
-        if not _HAS_RAY:
-            logger.warning("Ray not available, falling back to ThreadPoolExecutor")
-            return self.add_documents(documents, metadata)
-        
-        start_time = time.time()
-        
-        if metadata is None:
-            metadata = [{'source': f'doc_{i}'} for i in range(len(documents))]
-        
-        try:
-            # Initialize Ray if not already initialized
-            if not ray.is_initialized():
-                ray.init(ignore_reinit_error=True, num_cpus=None)
-                logger.info(f"[Ray] Initialized with {ray.available_resources().get('CPU', 0)} CPUs")
-            
-            # Define Ray remote function for document processing
-            @ray.remote
-            def process_document_ray(doc: str, meta: Dict[str, Any], chunker):
-                """Process a single document in Ray worker"""
-                chunks_data = chunker.chunk_document(doc, meta)
-                sections = chunker.section_detector.detect_sections(doc)
-                return chunks_data, len(sections)
-            
-            # Define Ray actor for stateful processing
-            @ray.remote
-            class DocumentProcessorActor:
-                def __init__(self, chunker):
-                    self.chunker = chunker
-                    self.processed = 0
-                
-                def process(self, doc: str, meta: Dict[str, Any]):
-                    chunks_data = self.chunker.chunk_document(doc, meta)
-                    sections = self.chunker.section_detector.detect_sections(doc)
-                    self.processed += 1
-                    return chunks_data, len(sections)
-                
-                def get_count(self):
-                    return self.processed
-            
-            all_chunks = []
-            all_metadata = []
-            total_sections = 0
-            
-            if use_actors:
-                # Use Ray actors for processing
-                logger.info(f"[Ray] Creating {num_actors} processor actors for {len(documents)} documents")
-                actors = [DocumentProcessorActor.remote(self.chunker) for _ in range(num_actors)]
-                
-                # Distribute documents across actors
-                futures = []
-                for i, (doc, meta) in enumerate(zip(documents, metadata)):
-                    actor_idx = i % num_actors
-                    future = actors[actor_idx].process.remote(doc, meta)
-                    futures.append(future)
-                
-                # Wait for all tasks
-                logger.info("[Ray] Processing documents with actors...")
-                results = ray.get(futures)
-                
-                # Get statistics from actors
-                counts = ray.get([actor.get_count.remote() for actor in actors])
-                logger.info(f"[Ray] Actor processing counts: {counts}")
-            else:
-                # Use remote functions
-                logger.info(f"[Ray] Processing {len(documents)} documents with remote functions")
-                futures = [
-                    process_document_ray.remote(doc, meta, self.chunker)
-                    for doc, meta in zip(documents, metadata)
-                ]
-                results = ray.get(futures)
-            
-            # Combine results
-            for chunks_data, section_count in results:
-                for chunk_data in chunks_data:
-                    all_chunks.append(chunk_data['text'])
-                    all_metadata.append(chunk_data['metadata'])
-                total_sections += section_count
-            
-            # Add to search engine
-            if all_chunks:
-                self.search_engine.add_documents(all_chunks, all_metadata)
-            
-            # Update stats
-            self.stats['documents_processed'] += len(documents)
-            self.stats['chunks_created'] += len(all_chunks)
-            self.stats['sections_detected'] += total_sections
-            
-            processing_time = time.time() - start_time
-            logger.info(f"[Ray] Processed {len(documents)} docs -> {len(all_chunks)} chunks in {processing_time:.2f}s")
-            
-            return {
-                'documents_added': len(documents),
-                'chunks_created': len(all_chunks),
-                'sections_detected': total_sections,
-                'processing_time': processing_time,
-                'method': 'ray_actors' if use_actors else 'ray_remote'
-            }
-        
-        except Exception as e:
-            logger.error(f"[Ray] Error during parallel processing: {e}")
-            logger.warning("[Ray] Falling back to ThreadPoolExecutor")
-            return self.add_documents(documents, metadata)
 
 
 # ============================================================================

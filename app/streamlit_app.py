@@ -1,18 +1,9 @@
 # app/streamlit_app.py - Focused UI: Upload (auto-index) + Chat
 from __future__ import annotations
 
-# Fix for Ray workers: Ensure local modules can be imported
 import sys
 import os
 from pathlib import Path
-
-# Add project root to PYTHONPATH for Ray workers
-project_root = Path(__file__).parent.parent.absolute()
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
-# Also set PYTHONPATH environment variable for subprocesses
-os.environ['PYTHONPATH'] = f"{project_root}:{os.environ.get('PYTHONPATH', '')}"
-
 import time
 from typing import List, Dict, Any
 
@@ -21,13 +12,8 @@ from dotenv import load_dotenv
 import pandas as pd
 
 from utils import human_size, list_supported_files, clear_dir, safe_listdir
-from parser import extract_docs_to_chunks_and_records, extract_docs_to_chunks_and_records_ray
+from parser import extract_docs_to_chunks_and_records
 from rag_engine import create_advanced_rag_engine
-
-# Check if Ray should be used (can be controlled via environment variable)
-USE_RAY = os.getenv("USE_RAY", "true").lower() in ("true", "1", "yes")
-RAY_USE_ACTORS = os.getenv("RAY_USE_ACTORS", "true").lower() in ("true", "1", "yes")
-RAY_NUM_ACTORS = int(os.getenv("RAY_NUM_ACTORS", "2"))
 
 load_dotenv()
 st.set_page_config(page_title="Resume Analysis Agent", layout="wide")
@@ -86,37 +72,18 @@ with st.sidebar:
 
         # Only index new files
         if new_files:
-            processing_method = "Ray distributed" if USE_RAY else "Sequential"
-            with st.spinner(f"Indexing {len(new_files)} new file(s) using {processing_method} processing..."):
-                # Use Ray processing if enabled, otherwise fall back to sequential
-                if USE_RAY:
-                    chunks, metas, records = extract_docs_to_chunks_and_records_ray(
-                        new_files, 
-                        use_ray=True, 
-                        use_actors=RAY_USE_ACTORS,
-                        num_actors=RAY_NUM_ACTORS
-                    )
-                else:
-                    chunks, metas, records = extract_docs_to_chunks_and_records(new_files)
+            with st.spinner(f"Indexing {len(new_files)} new file(s)..."):
+                chunks, metas, records = extract_docs_to_chunks_and_records(new_files)
                 
                 if chunks:
                     # Convert to the format expected by fast semantic RAG
                     documents = [chunk.page_content if hasattr(chunk, 'page_content') else str(chunk) for chunk in chunks]
                     metadata = [meta for meta in metas]
                     
-                    # Use Ray for adding documents to engine if enabled and multiple documents
-                    if USE_RAY and len(documents) > 1:
-                        st.session_state.agent.add_documents_with_ray(
-                            documents, 
-                            metadata, 
-                            use_actors=RAY_USE_ACTORS,
-                            num_actors=RAY_NUM_ACTORS
-                        )
-                    else:
-                        st.session_state.agent.add_documents(documents, metadata)
+                    st.session_state.agent.add_documents(documents, metadata)
             
             processing_time = time.time() - start
-            st.success(f"Indexed {len(new_files)} new file(s) in {processing_time:.2f}s using {processing_method}")
+            st.success(f"Indexed {len(new_files)} new file(s) in {processing_time:.2f}s")
         else:
             st.info(f"All {len(saved_files)} file(s) already indexed, skipping re-indexing")
 
@@ -124,25 +91,6 @@ with st.sidebar:
     files = list_supported_files(UPLOAD_DIR)
     sizes = sum(p.stat().st_size for p in files)
     st.caption(f"Session: {len(files)} files • {human_size(sizes)}")
-    
-    # Show processing configuration
-    st.markdown("### Processing Configuration")
-    if USE_RAY:
-        try:
-            import ray
-            if ray.is_initialized():
-                ray_resources = ray.available_resources()
-                cpus = ray_resources.get('CPU', 0)
-                st.success(f"Ray: Enabled ({int(cpus)} CPUs)")
-                st.caption(f"Mode: {'Actors' if RAY_USE_ACTORS else 'Remote Functions'}")
-                if RAY_USE_ACTORS:
-                    st.caption(f"Actors: {RAY_NUM_ACTORS}")
-            else:
-                st.info("Ray: Available (will initialize on first use)")
-        except ImportError:
-            st.warning("Ray: Not installed (using sequential)")
-    else:
-        st.info("Processing: Sequential (Ray disabled)")
     
     # Show indexed resumes with their details
     if st.session_state.agent.has_index():
@@ -172,15 +120,6 @@ with st.sidebar:
 
     # Single-click Clear Session - resets everything immediately
     if st.button("Clear Session", use_container_width=True, type="primary"):
-        # Shutdown Ray if it's running
-        try:
-            import ray
-            if ray.is_initialized():
-                ray.shutdown()
-                st.info("Ray cluster shut down")
-        except:
-            pass
-        
         # Clear the agent's index
         if hasattr(st.session_state, 'agent'):
             st.session_state.agent.clear_index()
