@@ -9,8 +9,13 @@ Advanced RAG System with:
 """
 
 from __future__ import annotations
-import logging
+
+# Fix for Ray workers: Ensure local modules can be imported
+import sys
 import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import logging
 import re
 import time
 from collections import defaultdict, Counter
