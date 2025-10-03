@@ -236,7 +236,19 @@ class SectionDetector:
         ],
         'languages': [
             r'\blanguages?\b',
-            r'\blinguistic\s+skills\b'
+            r'\blinguistic\s+skills\b',
+            r'\blanguage\s+proficiency\b',
+            r'\bspoken\s+languages?\b'
+        ],
+        'hobbies': [
+            r'\bhobbies?\b',
+            r'\binterests?\b',
+            r'\bpersonal\s+interests?\b',
+            r'\bhobbies?\s+(?:and|&)\s+interests?\b',
+            r'\bleisure\s+activities?\b',
+            r'\brecreational\s+activities?\b',
+            r'\bpastimes?\b',
+            r'\boutside\s+(?:interests?|work)\b'
         ],
         'references': [
             r'\breferences?\b',

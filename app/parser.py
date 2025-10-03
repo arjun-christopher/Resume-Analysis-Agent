@@ -125,6 +125,9 @@ from extractors.publications_extractor import extract_publications_comprehensive
 from extractors.experience_extractor import extract_experiences_comprehensive
 from extractors.skills_extractor import extract_comprehensive_skills, SKILLS_DATABASE, _KEYWORD_PROCESSOR
 from extractors.education_extractor import extract_education_comprehensive, extract_education_info
+from extractors.hobbies_extractor import extract_hobbies_comprehensive
+from extractors.languages_extractor import extract_languages_comprehensive
+from extractors.summary_extractor import extract_summary_comprehensive
 
 # ---------- Configuration ----------
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
@@ -1289,6 +1292,9 @@ def extract_comprehensive_entities(text: str, hyperlinks_data: Optional[Dict] = 
     activities = extract_activities_comprehensive(text)
     publications = extract_publications_comprehensive(text)
     experiences = extract_experiences_comprehensive(text)
+    hobbies = extract_hobbies_comprehensive(text)
+    languages = extract_languages_comprehensive(text)
+    professional_summary = extract_summary_comprehensive(text)
 
     # Compile results
     entities = {
@@ -1310,6 +1316,10 @@ def extract_comprehensive_entities(text: str, hyperlinks_data: Optional[Dict] = 
         "activities": activities,
         "publications": publications,
         "experiences": experiences,
+        # New extractors for commonly missed sections
+        "hobbies": hobbies,
+        "languages": languages,
+        "professional_summary": professional_summary,
         "processing_info": {
             "text_length": len(text),
             "spacy_available": _NLP is not None,
