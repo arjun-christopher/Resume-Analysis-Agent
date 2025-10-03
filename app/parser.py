@@ -733,52 +733,198 @@ def extract_dates(text: str) -> List[Dict[str, str]]:
     return dates
 
 def extract_names_advanced(text: str) -> List[str]:
-    """Advanced name extraction using multiple strategies"""
-    names = set()
+    """Advanced name extraction using multiple strategies with confidence scoring"""
+    candidate_names = {}  # Store names with confidence scores
     lines = text.split('\n')
     
-    # Strategy 1: Look in first few lines
-    for i, line in enumerate(lines[:10]):
-        line = line.strip()
-        if len(line) < 3 or len(line) > 100:
-            continue
-        
-        # Skip lines with common resume keywords
-        skip_keywords = [
-            'resume', 'cv', 'curriculum', 'vitae', 'profile', 'summary', 
-            'contact', 'email', 'phone', 'address', 'skills', 'experience'
-        ]
-        
-        if any(keyword in line.lower() for keyword in skip_keywords):
-            continue
-        
-        # Try name patterns
-        for pattern in NAME_PATTERNS:
-            match = pattern.match(line)
-            if match:
-                candidate_name = match.group(1).strip()
-                words = candidate_name.split()
-                if 2 <= len(words) <= 4 and all(len(w) >= 2 for w in words):
-                    names.add(candidate_name)
+    # Enhanced skip keywords to avoid false positives
+    skip_keywords = [
+        'resume', 'cv', 'curriculum', 'vitae', 'profile', 'summary', 
+        'contact', 'email', 'phone', 'address', 'skills', 'experience',
+        'education', 'objective', 'portfolio', 'projects', 'work',
+        'professional', 'personal', 'references', 'certification',
+        'achievement', 'publication', 'awards', 'languages', 'hobbies'
+    ]
     
-    # Strategy 2: Extract from email usernames
+    # Words to exclude from being considered as names
+    exclude_words = [
+        'the', 'and', 'for', 'with', 'from', 'about', 'university',
+        'college', 'school', 'company', 'corporation', 'inc', 'llc',
+        'engineer', 'developer', 'manager', 'analyst', 'designer',
+        'consultant', 'specialist', 'director', 'senior', 'junior'
+    ]
+    
+    def calculate_name_confidence(name: str, position: int, context: str) -> float:
+        """Calculate confidence score for a potential name"""
+        score = 0.0
+        words = name.split()
+        
+        # Position bonus (earlier in document = higher confidence)
+        if position < 3:
+            score += 50
+        elif position < 10:
+            score += 30
+        elif position < 20:
+            score += 10
+        
+        # Length bonus (2-4 words typical for names)
+        if 2 <= len(words) <= 4:
+            score += 30
+        elif len(words) == 1:
+            score -= 20
+        
+        # All words capitalized
+        if all(word[0].isupper() for word in words if word):
+            score += 20
+        
+        # No numbers or special characters except hyphens and apostrophes
+        if not any(char.isdigit() or char in '!@#$%^&*()_+=[]{}|;:,.<>?/' for char in name):
+            score += 15
+        
+        # Context clues
+        context_lower = context.lower()
+        if any(keyword in context_lower for keyword in skip_keywords):
+            score -= 30
+        
+        # Check if words are common name parts
+        common_prefixes = ['mr', 'mrs', 'ms', 'dr', 'prof']
+        common_suffixes = ['jr', 'sr', 'ii', 'iii', 'iv', 'phd', 'md']
+        
+        for word in words:
+            word_lower = word.lower().rstrip('.,')
+            if word_lower in common_prefixes:
+                score += 10
+            elif word_lower in common_suffixes:
+                score += 5
+            elif word_lower in exclude_words:
+                score -= 40
+        
+        return score
+    
+    # Strategy 1: Look in first lines with enhanced pattern matching
+    for i, line in enumerate(lines[:25]):
+        original_line = line
+        line = line.strip()
+        
+        if len(line) < 3 or len(line) > 150:
+            continue
+        
+        # Remove common prefixes
+        line_clean = re.sub(r'^(Mr\.|Mrs\.|Ms\.|Dr\.|Prof\.)\s*', '', line, flags=re.IGNORECASE)
+        
+        # Try to match name patterns
+        # Pattern 1: Simple capitalized words at start of line
+        if i < 5 and line_clean and line_clean[0].isupper():
+            # Check if line looks like a name (not a sentence)
+            if not line.endswith(('.', '!', '?')) and len(line.split()) <= 5:
+                words = line_clean.split()
+                # Filter out words that are likely not names
+                name_words = [w for w in words if w and w[0].isupper() and not any(char.isdigit() for char in w)]
+                
+                if 2 <= len(name_words) <= 4:
+                    potential_name = ' '.join(name_words)
+                    # Clean up any trailing punctuation
+                    potential_name = re.sub(r'[,;:]$', '', potential_name)
+                    
+                    confidence = calculate_name_confidence(potential_name, i, original_line)
+                    if confidence > 20:  # Threshold
+                        if potential_name not in candidate_names or candidate_names[potential_name] < confidence:
+                            candidate_names[potential_name] = confidence
+        
+        # Pattern 2: Name patterns with regex
+        for pattern in NAME_PATTERNS:
+            match = pattern.match(line_clean)
+            if match:
+                potential_name = match.group(1).strip()
+                # Remove any trailing punctuation
+                potential_name = re.sub(r'[,;:]$', '', potential_name)
+                words = potential_name.split()
+                
+                if 2 <= len(words) <= 4 and all(len(w) >= 2 for w in words):
+                    confidence = calculate_name_confidence(potential_name, i, original_line)
+                    if confidence > 20:
+                        if potential_name not in candidate_names or candidate_names[potential_name] < confidence:
+                            candidate_names[potential_name] = confidence
+    
+    # Strategy 2: Extract from email usernames (lower confidence)
     emails = extract_emails(text)
     for email in emails:
         username = email.split('@')[0]
+        # Handle various email username formats
         if '.' in username:
             parts = username.split('.')[:2]  # Take first two parts
             if all(part.isalpha() and len(part) >= 2 for part in parts):
                 name = ' '.join(part.title() for part in parts)
-                names.add(name)
+                confidence = 15  # Lower confidence from email
+                if name not in candidate_names or candidate_names[name] < confidence:
+                    candidate_names[name] = confidence
+        elif '_' in username:
+            parts = username.split('_')[:2]
+            if all(part.isalpha() and len(part) >= 2 for part in parts):
+                name = ' '.join(part.title() for part in parts)
+                confidence = 15
+                if name not in candidate_names or candidate_names[name] < confidence:
+                    candidate_names[name] = confidence
     
-    # Strategy 3: Use spaCy NER if available
+    # Strategy 3: Use spaCy NER if available (high confidence for PERSON entities in first 5000 chars)
     if _NLP:
-        doc = _NLP(text[:5000])  # Limit for performance
-        for ent in doc.ents:
-            if ent.label_ == "PERSON" and len(ent.text.strip()) > 3:
-                names.add(ent.text.strip())
+        try:
+            doc = _NLP(text[:5000])  # Limit for performance
+            for ent in doc.ents:
+                if ent.label_ == "PERSON" and len(ent.text.strip()) > 3:
+                    name = ent.text.strip()
+                    # Calculate position-based confidence
+                    position_in_text = text[:5000].find(name)
+                    line_number = text[:position_in_text].count('\n') if position_in_text >= 0 else 999
+                    
+                    confidence = 25  # Base confidence for NER
+                    if line_number < 10:
+                        confidence += 25
+                    elif line_number < 20:
+                        confidence += 15
+                    
+                    if name not in candidate_names or candidate_names[name] < confidence:
+                        candidate_names[name] = confidence
+        except Exception as e:
+            print(f"SpaCy NER error: {e}")
     
-    return list(names)
+    # Strategy 4: Use transformer-based NER if available
+    if _NER_PIPELINE:
+        try:
+            # Process first 2000 characters for efficiency
+            text_sample = text[:2000]
+            ner_results = _NER_PIPELINE(text_sample)
+            
+            for entity in ner_results:
+                if entity.get('entity_group') == 'PER' or 'PER' in entity.get('entity', ''):
+                    name = entity.get('word', '').strip()
+                    # Clean up tokenization artifacts
+                    name = name.replace('##', '').replace('Ġ', ' ').strip()
+                    
+                    if len(name) > 3:
+                        # Position-based confidence
+                        start_pos = entity.get('start', 1000)
+                        line_number = text_sample[:start_pos].count('\n')
+                        
+                        confidence = 30  # Higher confidence for transformer
+                        if line_number < 5:
+                            confidence += 30
+                        elif line_number < 15:
+                            confidence += 15
+                        
+                        if name not in candidate_names or candidate_names[name] < confidence:
+                            candidate_names[name] = confidence
+        except Exception as e:
+            print(f"Transformer NER error: {e}")
+    
+    # Sort by confidence and return top names
+    sorted_names = sorted(candidate_names.items(), key=lambda x: x[1], reverse=True)
+    
+    # Return names with confidence > threshold
+    result = [name for name, conf in sorted_names if conf > 20]
+    
+    # If we found names, return top 3 max; if none, return empty list
+    return result[:3] if result else []
 
 def extract_skills_flashtext(text: str) -> Dict[str, List[str]]:
     """Extract skills using FlashText for fast keyword matching"""
@@ -1134,6 +1280,18 @@ def process_documents_with_pymupdf(file_paths: List[Path]) -> Tuple[List[str], L
         # Extract comprehensive entities with hyperlink data
         entities = extract_comprehensive_entities(full_text, hyperlinks_data)
         
+        # Extract candidate name with high priority
+        candidate_names = extract_names_advanced(full_text)
+        candidate_name = candidate_names[0] if candidate_names else None
+        
+        # If no name found through advanced extraction, try to get from entities
+        if not candidate_name and entities.get('names'):
+            candidate_name = entities['names'][0]
+        
+        # Fallback: Use filename (remove extension and clean)
+        if not candidate_name:
+            candidate_name = file_path.stem.replace('_', ' ').replace('-', ' ').title()
+        
         # Create semantic chunks
         semantic_chunks = extract_semantic_chunks(full_text)
         
@@ -1148,6 +1306,7 @@ def process_documents_with_pymupdf(file_paths: List[Path]) -> Tuple[List[str], L
             chunk_meta = {
                 "resume_id": resume_id,
                 "resume_name": resume_name,
+                "candidate_name": candidate_name,  # Add candidate name
                 "file": file_path.name,
                 "path": str(file_path),
                 "chunk_index": i,
@@ -1170,6 +1329,7 @@ def process_documents_with_pymupdf(file_paths: List[Path]) -> Tuple[List[str], L
         document_record = {
             "resume_id": resume_id,
             "resume_name": resume_name,
+            "candidate_name": candidate_name,  # Add candidate name
             "file": file_path.name,
             "path": str(file_path),
             "file_hash": resume_id,  # Same as resume_id for consistency

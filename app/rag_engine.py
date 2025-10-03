@@ -1219,36 +1219,70 @@ class AdvancedRAGEngine:
         grouped_results: Optional[Dict[str, List[Tuple[str, Dict, float]]]] = None,
         is_comparison: bool = False
     ) -> str:
-        """Build context string for LLM with optional grouping"""
+        """Build context string for LLM with optional grouping and candidate names"""
         if grouped_results and is_comparison:
-            # Group context by resume for comparison queries
+            # Group context by resume for comparison queries - WITH CANDIDATE NAMES
             context_parts = []
             for group_key, group_results in grouped_results.items():
                 resume_id, resume_name = group_key.split('|', 1)
-                context_parts.append(f"\n### 📄 {resume_name}\n")
-                for text, meta, score in group_results[:3]:  # Limit per resume
+                
+                # Try to get candidate name from metadata
+                candidate_name = None
+                if group_results:
+                    candidate_name = group_results[0][1].get('candidate_name')
+                
+                # Use candidate name if available, otherwise use resume name
+                display_name = candidate_name if candidate_name else resume_name
+                
+                context_parts.append(f"\n{'='*80}")
+                context_parts.append(f"CANDIDATE: {display_name}")
+                context_parts.append(f"Resume File: {resume_name}")
+                context_parts.append(f"{'='*80}\n")
+                
+                for text, meta, score in group_results[:5]:  # More content per resume
                     section_type = meta.get('section_type', 'unknown')
-                    context_parts.append(f"[{section_type}] {text}\n")
+                    context_parts.append(f"[{section_type.upper()}]")
+                    context_parts.append(f"{text}\n")
+                
             return '\n'.join(context_parts)
         else:
-            # Standard context format
-            return '\n\n'.join([
-                f"[{meta.get('section_type', 'unknown')}] {text}" 
-                for text, meta, _ in results
-            ])
+            # Standard context format - also include candidate name if available
+            context_parts = []
+            for text, meta, score in results:
+                candidate_name = meta.get('candidate_name')
+                resume_name = meta.get('resume_name', 'Unknown Resume')
+                section_type = meta.get('section_type', 'unknown')
+                
+                if candidate_name:
+                    context_parts.append(f"[Candidate: {candidate_name} | Section: {section_type}]")
+                else:
+                    context_parts.append(f"[File: {resume_name} | Section: {section_type}]")
+                
+                context_parts.append(f"{text}\n")
+            
+            return '\n'.join(context_parts)
     
     def get_resume_list(self) -> List[Dict[str, str]]:
-        """Get list of all indexed resumes with their IDs and names"""
+        """Get list of all indexed resumes with their IDs, names, and candidate names"""
         resume_map = {}
         for metadata in self.search_engine.metadata:
             resume_id = metadata.get('resume_id')
             resume_name = metadata.get('resume_name')
+            candidate_name = metadata.get('candidate_name')
+            
             if resume_id and resume_id not in resume_map:
-                resume_map[resume_id] = resume_name
+                resume_map[resume_id] = {
+                    'resume_name': resume_name,
+                    'candidate_name': candidate_name
+                }
         
         return [
-            {'resume_id': rid, 'resume_name': rname} 
-            for rid, rname in resume_map.items()
+            {
+                'resume_id': rid, 
+                'resume_name': data['resume_name'],
+                'candidate_name': data['candidate_name'] if data['candidate_name'] else data['resume_name']
+            } 
+            for rid, data in resume_map.items()
         ]
     
     def _determine_search_weights(self, question: str) -> Tuple[float, float]:
@@ -1274,51 +1308,105 @@ class AdvancedRAGEngine:
         results: List[Tuple[str, Dict, float]], 
         grouped_results: Optional[Dict[str, List[Tuple[str, Dict, float]]]] = None
     ) -> str:
-        """Extract structured insights from results with optional grouping"""
+        """Extract structured insights from results with candidate names and grouping"""
         question_lower = question.lower()
         insights = []
         
-        # If grouped results available, show resume breakdown
+        # If grouped results available, show resume breakdown with candidate names
         if grouped_results:
-            resume_names = [key.split('|', 1)[1] for key in grouped_results.keys()]
-            insights.append(f"**Resumes Analyzed:** {len(grouped_results)} ({', '.join(resume_names[:5])}{' and more...' if len(resume_names) > 5 else ''})")
+            candidate_info = []
+            for group_key, group_results in grouped_results.items():
+                resume_id, resume_name = group_key.split('|', 1)
+                # Get candidate name from first result in group
+                candidate_name = None
+                if group_results:
+                    candidate_name = group_results[0][1].get('candidate_name')
+                
+                if candidate_name:
+                    candidate_info.append(f"**{candidate_name}** ({resume_name})")
+                else:
+                    candidate_info.append(f"{resume_name}")
+            
+            insights.append(f"**Candidates Analyzed:** {len(grouped_results)}")
+            insights.append('\n'.join(f"  {i+1}. {info}" for i, info in enumerate(candidate_info)))
+            insights.append("")  # Empty line for spacing
         
         # Aggregate data by section type
         section_data = defaultdict(list)
+        candidate_data = defaultdict(lambda: defaultdict(set))
+        
         for text, metadata, score in results:
             section_type = metadata.get('section_type', 'unknown')
+            candidate_name = metadata.get('candidate_name', 'Unknown')
+            
             section_data[section_type].append((text, metadata, score))
+            
+            # Aggregate candidate-specific data
+            if 'emails' in metadata:
+                candidate_data[candidate_name]['emails'].update(metadata['emails'])
+            if 'phones' in metadata:
+                candidate_data[candidate_name]['phones'].update(metadata['phones'])
+            if 'skills' in metadata:
+                candidate_data[candidate_name]['skills'].update(metadata.get('skills', []))
+            if 'technical_skills' in metadata:
+                candidate_data[candidate_name]['skills'].update(metadata.get('technical_skills', []))
         
         # Extract specific data based on question
         if any(word in question_lower for word in ['email', 'contact']):
-            emails = set()
-            for text, metadata, _ in results:
-                if 'emails' in metadata:
-                    emails.update(metadata['emails'])
-            if emails:
-                insights.append(f"**Emails Found:** {', '.join(sorted(emails))}")
+            if candidate_data:
+                insights.append("**Contact Information:**")
+                for candidate_name, data in candidate_data.items():
+                    if data.get('emails'):
+                        emails_str = ', '.join(sorted(data['emails']))
+                        insights.append(f"  • **{candidate_name}:** {emails_str}")
+                    if data.get('phones'):
+                        phones_str = ', '.join(sorted(data['phones']))
+                        insights.append(f"  • **{candidate_name}** (Phone): {phones_str}")
         
-        if any(word in question_lower for word in ['skill', 'technology']):
-            skills = set()
-            for text, metadata, _ in results:
-                if 'skills' in metadata or 'technical_skills' in metadata:
-                    skills.update(metadata.get('skills', []))
-                    skills.update(metadata.get('technical_skills', []))
-            if skills:
-                insights.append(f"**Skills:** {', '.join(list(skills)[:15])}")
+        if any(word in question_lower for word in ['skill', 'technology', 'expertise']):
+            if candidate_data:
+                insights.append("**Skills Summary:**")
+                for candidate_name, data in candidate_data.items():
+                    if data.get('skills'):
+                        skills_list = list(data['skills'])[:10]  # Top 10 skills
+                        skills_str = ', '.join(skills_list)
+                        insights.append(f"  • **{candidate_name}:** {skills_str}")
         
         # Section summary
-        if section_data:
+        if section_data and not grouped_results:  # Only show if not already showing grouped info
             insights.append(f"\n**Sections Retrieved:** {', '.join(section_data.keys())}")
         
         return '\n'.join(insights) if insights else ""
     
     def _generate_response(self, question: str, context: str) -> str:
-        """Generate LLM response with fallback retry"""
+        """Generate LLM response with improved prompting for multi-resume scenarios"""
         if not self.llm:
             return ""
         
-        prompt = f"""You are an expert resume analyst. Answer the question based on the resume sections provided.
+        # Detect if this is a multi-candidate query
+        is_multi_candidate = "CANDIDATE:" in context and context.count("CANDIDATE:") > 1
+        
+        if is_multi_candidate:
+            prompt = f"""You are an expert resume analyst comparing multiple candidates. Answer the question based on the resume sections provided.
+
+RESUME DATA (Multiple Candidates):
+{context}
+
+QUESTION: {question}
+
+IMPORTANT INSTRUCTIONS:
+1. **Start each candidate's information with their name in BOLD** (e.g., **John Smith:**)
+2. Present information for EACH candidate separately
+3. Use clear formatting with bullet points
+4. If comparing or ranking, explain your reasoning
+5. Extract specific details (skills, experience, education) for each candidate
+6. Be factual and cite evidence from the resumes
+
+Provide a comprehensive answer that clearly identifies each candidate and their relevant qualifications.
+
+ANSWER:"""
+        else:
+            prompt = f"""You are an expert resume analyst. Answer the question based on the resume sections provided.
 
 RESUME SECTIONS:
 {context}
@@ -1330,7 +1418,7 @@ Provide a clear, structured answer with:
 2. **Details** - Support with specific evidence from the resume
 3. **Summary** - Brief conclusion if needed
 
-Use bullet points and clear formatting.
+Use bullet points and clear formatting. If a candidate name is provided, use it in your response.
 
 ANSWER:"""
         

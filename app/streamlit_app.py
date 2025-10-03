@@ -149,7 +149,19 @@ with st.sidebar:
         resume_list = st.session_state.agent.get_resume_list()
         if resume_list:
             st.markdown("### Indexed Resumes")
-            st.caption(f"{len(resume_list)} unique resumes indexed")
+            st.caption(f"{len(resume_list)} unique candidates indexed")
+            
+            # Display candidate names in the sidebar
+            with st.expander("View Candidates", expanded=False):
+                for idx, resume_info in enumerate(resume_list, 1):
+                    candidate_name = resume_info.get('candidate_name', 'Unknown')
+                    resume_name = resume_info.get('resume_name', 'Unknown')
+                    
+                    if candidate_name != resume_name:
+                        st.write(f"{idx}. **{candidate_name}** ({resume_name})")
+                    else:
+                        st.write(f"{idx}. {resume_name}")
+
     
     if files:
         with st.expander("Files", expanded=False):
@@ -265,29 +277,48 @@ if prompt:
             # Show additional metadata if multi-resume query
             if result.get('grouped_by_resume'):
                 resume_count = result.get('resume_count', 0)
-                st.info(f"ℹ️ Analysis covers **{resume_count} resumes**")
+                st.info(f"ℹ️ Analysis covers **{resume_count} candidates**")
             
             # Show source information in expandable section
             if result.get('source_documents'):
                 with st.expander("Source Information", expanded=False):
-                    # Group sources by resume
-                    sources_by_resume = {}
-                    for doc in result['source_documents'][:10]:  # Limit to top 10
+                    # Group sources by candidate/resume
+                    sources_by_candidate = {}
+                    for doc in result['source_documents'][:15]:  # Show more sources
+                        candidate_name = doc.metadata.get('candidate_name')
                         resume_name = doc.metadata.get('resume_name', 'Unknown')
-                        if resume_name not in sources_by_resume:
-                            sources_by_resume[resume_name] = []
-                        sources_by_resume[resume_name].append({
+                        
+                        # Use candidate name as primary key, fallback to resume name
+                        display_key = candidate_name if candidate_name else resume_name
+                        
+                        if display_key not in sources_by_candidate:
+                            sources_by_candidate[display_key] = {
+                                'candidate_name': candidate_name,
+                                'resume_name': resume_name,
+                                'sources': []
+                            }
+                        
+                        sources_by_candidate[display_key]['sources'].append({
                             'section': doc.metadata.get('section_type', 'unknown'),
                             'score': doc.metadata.get('relevance_score', 0),
                             'text': doc.page_content[:200] + '...' if len(doc.page_content) > 200 else doc.page_content
                         })
                     
-                    # Display grouped sources
-                    for resume_name, sources in sources_by_resume.items():
-                        st.markdown(f"**{resume_name}**")
-                        for source in sources:
-                            st.markdown(f"- *[{source['section']}]* (score: {source['score']:.3f})")
+                    # Display grouped sources with candidate names
+                    for display_key, data in sources_by_candidate.items():
+                        candidate_name = data['candidate_name']
+                        resume_name = data['resume_name']
+                        
+                        if candidate_name:
+                            st.markdown(f"### **{candidate_name}**")
+                            st.caption(f"File: {resume_name}")
+                        else:
+                            st.markdown(f"### **{resume_name}**")
+                        
+                        for source in data['sources']:
+                            st.markdown(f"- **[{source['section'].title()}]** (relevance: {source['score']:.3f})")
                             st.caption(f"  {source['text']}")
+                        
                         st.markdown("---")
     
     st.session_state.history.append({"role":"assistant","text":result["answer"]})
