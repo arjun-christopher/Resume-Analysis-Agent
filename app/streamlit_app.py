@@ -1,5 +1,6 @@
 # app/streamlit_app.py - Focused UI: Upload (auto-index) + Chat
 from __future__ import annotations
+import os
 import time
 from pathlib import Path
 from typing import List, Dict, Any
@@ -9,8 +10,13 @@ from dotenv import load_dotenv
 import pandas as pd
 
 from utils import human_size, list_supported_files, clear_dir, safe_listdir
-from parser import extract_docs_to_chunks_and_records
+from parser import extract_docs_to_chunks_and_records, extract_docs_to_chunks_and_records_ray
 from rag_engine import create_advanced_rag_engine
+
+# Check if Ray should be used (can be controlled via environment variable)
+USE_RAY = os.getenv("USE_RAY", "true").lower() in ("true", "1", "yes")
+RAY_USE_ACTORS = os.getenv("RAY_USE_ACTORS", "true").lower() in ("true", "1", "yes")
+RAY_NUM_ACTORS = int(os.getenv("RAY_NUM_ACTORS", "2"))
 
 load_dotenv()
 st.set_page_config(page_title="Resume Analysis Agent", layout="wide")
@@ -39,7 +45,7 @@ if st.session_state.agent.has_index() and not st.session_state.indexed_files:
     existing_files = list_supported_files(UPLOAD_DIR)
     st.session_state.indexed_files = {f.name for f in existing_files}
     if existing_files:
-        st.info(f"📂 Loaded existing index with {len(existing_files)} files from previous session")
+        st.info(f"Loaded existing index with {len(existing_files)} files from previous session")
 
 st.title("Resume Analysis Agent")
 
@@ -69,14 +75,37 @@ with st.sidebar:
 
         # Only index new files
         if new_files:
-            with st.spinner(f"Indexing {len(new_files)} new file(s)..."):
-                chunks, metas, records = extract_docs_to_chunks_and_records(new_files)
+            processing_method = "Ray distributed" if USE_RAY else "Sequential"
+            with st.spinner(f"Indexing {len(new_files)} new file(s) using {processing_method} processing..."):
+                # Use Ray processing if enabled, otherwise fall back to sequential
+                if USE_RAY:
+                    chunks, metas, records = extract_docs_to_chunks_and_records_ray(
+                        new_files, 
+                        use_ray=True, 
+                        use_actors=RAY_USE_ACTORS,
+                        num_actors=RAY_NUM_ACTORS
+                    )
+                else:
+                    chunks, metas, records = extract_docs_to_chunks_and_records(new_files)
+                
                 if chunks:
                     # Convert to the format expected by fast semantic RAG
                     documents = [chunk.page_content if hasattr(chunk, 'page_content') else str(chunk) for chunk in chunks]
                     metadata = [meta for meta in metas]
-                    st.session_state.agent.add_documents(documents, metadata)
-            st.success(f"Indexed {len(new_files)} new file(s) in {time.time()-start:.2f}s")
+                    
+                    # Use Ray for adding documents to engine if enabled and multiple documents
+                    if USE_RAY and len(documents) > 1:
+                        st.session_state.agent.add_documents_with_ray(
+                            documents, 
+                            metadata, 
+                            use_actors=RAY_USE_ACTORS,
+                            num_actors=RAY_NUM_ACTORS
+                        )
+                    else:
+                        st.session_state.agent.add_documents(documents, metadata)
+            
+            processing_time = time.time() - start
+            st.success(f"Indexed {len(new_files)} new file(s) in {processing_time:.2f}s using {processing_method}")
         else:
             st.info(f"All {len(saved_files)} file(s) already indexed, skipping re-indexing")
 
@@ -85,11 +114,30 @@ with st.sidebar:
     sizes = sum(p.stat().st_size for p in files)
     st.caption(f"Session: {len(files)} files • {human_size(sizes)}")
     
+    # Show processing configuration
+    st.markdown("### Processing Configuration")
+    if USE_RAY:
+        try:
+            import ray
+            if ray.is_initialized():
+                ray_resources = ray.available_resources()
+                cpus = ray_resources.get('CPU', 0)
+                st.success(f"Ray: Enabled ({int(cpus)} CPUs)")
+                st.caption(f"Mode: {'Actors' if RAY_USE_ACTORS else 'Remote Functions'}")
+                if RAY_USE_ACTORS:
+                    st.caption(f"Actors: {RAY_NUM_ACTORS}")
+            else:
+                st.info("Ray: Available (will initialize on first use)")
+        except ImportError:
+            st.warning("Ray: Not installed (using sequential)")
+    else:
+        st.info("Processing: Sequential (Ray disabled)")
+    
     # Show indexed resumes with their details
     if st.session_state.agent.has_index():
         resume_list = st.session_state.agent.get_resume_list()
         if resume_list:
-            st.markdown("### 📋 Indexed Resumes")
+            st.markdown("### Indexed Resumes")
             st.caption(f"{len(resume_list)} unique resumes indexed")
             
             with st.expander("View Resume List", expanded=False):
@@ -107,6 +155,15 @@ with st.sidebar:
 
     # Single-click Clear Session - resets everything immediately
     if st.button("Clear Session", use_container_width=True, type="primary"):
+        # Shutdown Ray if it's running
+        try:
+            import ray
+            if ray.is_initialized():
+                ray.shutdown()
+                st.info("Ray cluster shut down")
+        except:
+            pass
+        
         # Clear the agent's index
         if hasattr(st.session_state, 'agent'):
             st.session_state.agent.clear_index()
@@ -207,7 +264,7 @@ if prompt:
             
             # Show source information in expandable section
             if result.get('source_documents'):
-                with st.expander("📚 Source Information", expanded=False):
+                with st.expander("Source Information", expanded=False):
                     # Group sources by resume
                     sources_by_resume = {}
                     for doc in result['source_documents'][:10]:  # Limit to top 10
@@ -222,7 +279,7 @@ if prompt:
                     
                     # Display grouped sources
                     for resume_name, sources in sources_by_resume.items():
-                        st.markdown(f"**📄 {resume_name}**")
+                        st.markdown(f"**{resume_name}**")
                         for source in sources:
                             st.markdown(f"- *[{source['section']}]* (score: {source['score']:.3f})")
                             st.caption(f"  {source['text']}")

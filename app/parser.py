@@ -1198,3 +1198,169 @@ def extract_docs_to_chunks_and_records(paths: List[Path]) -> Tuple[List[str], Li
     Compatibility function with the original parsing interface
     """
     return process_documents_with_pymupdf(paths)
+
+
+# ---------- Ray Distributed Processing ----------
+try:
+    import ray
+    _HAS_RAY = True
+except ImportError:
+    _HAS_RAY = False
+    ray = None
+
+# Ray remote function for processing single document
+if _HAS_RAY:
+    @ray.remote
+    def process_single_document_ray(file_path: Path) -> Tuple[List[str], List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Ray remote function to process a single document
+        This runs in a separate Ray worker process
+        
+        Args:
+            file_path: Path to the document to process
+            
+        Returns:
+            tuple: (chunks, chunk_metadata, document_records) for this document
+        """
+        return process_documents_with_pymupdf([file_path])
+
+
+    @ray.remote
+    class ResumeParserActor:
+        """
+        Ray actor for stateful resume parsing with model reuse
+        Models are loaded once per actor and reused across tasks
+        """
+        
+        def __init__(self):
+            """Initialize the actor and load models once"""
+            # Models are already loaded as global variables in this module
+            # This actor will reuse them efficiently
+            self.processed_count = 0
+            print("[Ray Actor] Initialized resume parser actor")
+        
+        def parse_resume(self, file_path: Path) -> Tuple[List[str], List[Dict[str, Any]], List[Dict[str, Any]]]:
+            """
+            Parse a single resume using the actor's loaded models
+            
+            Args:
+                file_path: Path to the resume file
+                
+            Returns:
+                tuple: (chunks, chunk_metadata, document_records)
+            """
+            self.processed_count += 1
+            print(f"[Ray Actor] Processing resume {self.processed_count}: {file_path.name}")
+            return process_documents_with_pymupdf([file_path])
+        
+        def get_stats(self) -> Dict[str, Any]:
+            """Get statistics about this actor's processing"""
+            return {
+                "processed_count": self.processed_count
+            }
+
+
+def process_documents_with_ray_parallel(
+    file_paths: List[Path], 
+    use_actors: bool = True,
+    num_actors: int = 2
+) -> Tuple[List[str], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Process documents in parallel using Ray distributed computing
+    
+    Args:
+        file_paths: List of file paths to process
+        use_actors: If True, use Ray actors for model reuse; if False, use remote functions
+        num_actors: Number of Ray actors to create (only used if use_actors=True)
+        
+    Returns:
+        tuple: (chunks, chunk_metadata, document_records) combined from all documents
+    """
+    if not _HAS_RAY:
+        print("Ray not available, falling back to sequential processing")
+        return process_documents_with_pymupdf(file_paths)
+    
+    if not file_paths:
+        return [], [], []
+    
+    # Filter valid files
+    file_paths = [p for p in file_paths if p.suffix.lower() in ALLOWED_EXTENSIONS and p.exists()]
+    if not file_paths:
+        return [], [], []
+    
+    try:
+        # Initialize Ray if not already initialized
+        if not ray.is_initialized():
+            ray.init(ignore_reinit_error=True, num_cpus=None)  # Use all available CPUs
+            print(f"[Ray] Initialized with {ray.available_resources().get('CPU', 0)} CPUs")
+        
+        if use_actors:
+            # Option 1: Use Ray actors (better for model reuse)
+            print(f"[Ray] Creating {num_actors} parser actors for {len(file_paths)} files...")
+            actors = [ResumeParserActor.remote() for _ in range(num_actors)]
+            
+            # Distribute files across actors in round-robin fashion
+            futures = []
+            for i, file_path in enumerate(file_paths):
+                actor_idx = i % num_actors
+                future = actors[actor_idx].parse_resume.remote(file_path)
+                futures.append(future)
+            
+            # Wait for all tasks to complete
+            print("[Ray] Processing resumes in parallel...")
+            results = ray.get(futures)
+            
+            # Get actor statistics
+            stats = ray.get([actor.get_stats.remote() for actor in actors])
+            for i, stat in enumerate(stats):
+                print(f"[Ray Actor {i}] Processed {stat['processed_count']} resume(s)")
+        
+        else:
+            # Option 2: Use remote functions (simpler but loads models per task)
+            print(f"[Ray] Processing {len(file_paths)} files with remote functions...")
+            futures = [process_single_document_ray.remote(fp) for fp in file_paths]
+            
+            # Wait for all tasks to complete
+            results = ray.get(futures)
+        
+        # Combine results from all workers
+        all_chunks = []
+        all_metadata = []
+        all_records = []
+        
+        for chunks, metadata, records in results:
+            all_chunks.extend(chunks)
+            all_metadata.extend(metadata)
+            all_records.extend(records)
+        
+        print(f"[Ray] Successfully processed {len(all_records)} documents into {len(all_chunks)} chunks")
+        return all_chunks, all_metadata, all_records
+    
+    except Exception as e:
+        print(f"[Ray] Error during parallel processing: {e}")
+        print("[Ray] Falling back to sequential processing")
+        return process_documents_with_pymupdf(file_paths)
+
+
+def extract_docs_to_chunks_and_records_ray(
+    paths: List[Path], 
+    use_ray: bool = True,
+    use_actors: bool = True,
+    num_actors: int = 2
+) -> Tuple[List[str], List[Dict[str,Any]], List[Dict[str,Any]]]:
+    """
+    Extract documents to chunks with optional Ray parallel processing
+    
+    Args:
+        paths: List of file paths to process
+        use_ray: If True, use Ray for parallel processing; if False, use sequential
+        use_actors: If True, use Ray actors; if False, use remote functions (only when use_ray=True)
+        num_actors: Number of Ray actors to create (only used if use_ray=True and use_actors=True)
+        
+    Returns:
+        tuple: (chunks, chunk_metadata, document_records)
+    """
+    if use_ray and _HAS_RAY:
+        return process_documents_with_ray_parallel(paths, use_actors=use_actors, num_actors=num_actors)
+    else:
+        return process_documents_with_pymupdf(paths)
