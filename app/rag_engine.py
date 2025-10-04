@@ -1700,7 +1700,8 @@ class HybridSearchEngine:
         candidate_name: Optional[str] = None,
         use_reranking: bool = True,
         section_filter: Optional[List[str]] = None,
-        use_ensemble_similarity: bool = False
+        use_ensemble_similarity: bool = False,
+        ensure_all_resumes: bool = False
     ) -> List[Tuple[str, Dict[str, Any], float]]:
         """
         Enhanced hybrid search with query expansion, reranking, section filtering, and ID-based filtering
@@ -1709,6 +1710,7 @@ class HybridSearchEngine:
         - Multi-metric ensemble similarity (5-8% accuracy boost)
         - Smart cross-encoder reranking with caching (15-20% accuracy boost)
         - Section-aware filtering
+        - Diverse retrieval to ensure all resumes are represented
         
         Args:
             query: Search query
@@ -1721,6 +1723,7 @@ class HybridSearchEngine:
             use_reranking: Whether to use cross-encoder reranking (default: True)
             section_filter: Optional list of section types to prioritize (e.g., ['experience', 'skills'])
             use_ensemble_similarity: Use multi-metric ensemble for 5-8% accuracy boost (slightly slower)
+            ensure_all_resumes: Ensure at least one result from each indexed resume (for comparison queries)
         """
         if not self.documents:
             return []
@@ -1757,6 +1760,9 @@ class HybridSearchEngine:
         
         # Fuse results using reciprocal rank fusion
         fused_results = self._fuse_results(semantic_results, bm25_results, semantic_weight, bm25_weight)
+        
+        # Store fused results for diverse retrieval (before filtering/reranking)
+        self._last_fused_results = fused_results.copy()
         
         # ENHANCEMENT 2: Section-aware filtering
         if section_filter:
@@ -1811,6 +1817,12 @@ class HybridSearchEngine:
             results = reranker.rerank(query, results, top_k=k, smart_rerank=True)
         else:
             results = results[:k]
+        
+        # IMPROVEMENT: Diverse retrieval - ensure all resumes are represented
+        # This is critical for comparison and aggregation queries
+        if ensure_all_resumes and len(results) > 0:
+            results = self._ensure_diverse_results(results, min_k=k)
+            logger.info(f"Diverse retrieval: Ensured representation from all {len(set(r[1].get('resume_id') for r in results))} resumes")
         
         return results
     
@@ -1886,6 +1898,110 @@ class HybridSearchEngine:
             result_dict[resume_id] = data
         
         return result_dict
+    
+    def _ensure_diverse_results(
+        self,
+        results: List[Tuple[str, Dict[str, Any], float]],
+        min_k: int = 5
+    ) -> List[Tuple[str, Dict[str, Any], float]]:
+        """
+        Ensure diverse results by guaranteeing at least one result from each indexed resume.
+        This fixes the bug where only top-scoring resumes are returned, missing some indexed resumes.
+        
+        Strategy:
+        1. Group results by resume_id
+        2. Take top result from each resume
+        3. Fill remaining slots with best scores
+        4. Maintain total result count around min_k
+        
+        Args:
+            results: Original ranked results
+            min_k: Minimum number of results to return
+            
+        Returns:
+            Diverse results ensuring all resumes are represented
+        """
+        if not results:
+            return results
+        
+        # Get all unique resume IDs from indexed documents
+        all_resume_ids = set()
+        if hasattr(self, 'metadata') and self.metadata:
+            for metadata in self.metadata:
+                resume_id = metadata.get('resume_id')
+                if resume_id:
+                    all_resume_ids.add(resume_id)
+        
+        # If we couldn't get resume IDs from metadata, extract from results
+        if not all_resume_ids:
+            for _, metadata, _ in results:
+                resume_id = metadata.get('resume_id')
+                if resume_id:
+                    all_resume_ids.add(resume_id)
+        
+        # Group results by resume_id
+        resume_groups = defaultdict(list)
+        for result in results:
+            text, metadata, score = result
+            resume_id = metadata.get('resume_id', 'unknown')
+            resume_groups[resume_id].append(result)
+        
+        # Check which resumes are missing
+        represented_resumes = set(resume_groups.keys())
+        missing_resumes = all_resume_ids - represented_resumes
+        
+        if missing_resumes:
+            logger.warning(f"Missing {len(missing_resumes)} resumes in results: {missing_resumes}")
+            logger.info(f"Performing expanded search to include all {len(all_resume_ids)} indexed resumes")
+            
+            # Use stored fused results from broader search
+            if hasattr(self, '_last_fused_results') and self._last_fused_results:
+                expanded_results = self._last_fused_results[:min_k * 5]
+                
+                # Re-group with expanded results
+                resume_groups.clear()
+                for result in expanded_results:
+                    text, metadata, score = result
+                    resume_id = metadata.get('resume_id', 'unknown')
+                    if resume_id in all_resume_ids:
+                        resume_groups[resume_id].append(result)
+        
+        # Build diverse result set
+        diverse_results = []
+        
+        # First, take top result from each resume (ensures representation)
+        for resume_id in all_resume_ids:
+            if resume_id in resume_groups and resume_groups[resume_id]:
+                diverse_results.append(resume_groups[resume_id][0])
+                logger.debug(f"  Including resume: {resume_id} (score: {resume_groups[resume_id][0][2]:.3f})")
+        
+        # Then, fill remaining slots with next-best results
+        remaining_slots = max(0, min_k - len(diverse_results))
+        if remaining_slots > 0:
+            # Collect all results except those already added
+            added_chunks = set()
+            for _, metadata, _ in diverse_results:
+                added_chunks.add(metadata.get('chunk_id', ''))
+            
+            additional_results = []
+            for result in results:
+                _, metadata, _ = result
+                chunk_id = metadata.get('chunk_id', '')
+                if chunk_id not in added_chunks:
+                    additional_results.append(result)
+                    if len(additional_results) >= remaining_slots:
+                        break
+            
+            diverse_results.extend(additional_results)
+        
+        # Sort by score (best first) while maintaining diversity
+        diverse_results.sort(key=lambda x: x[2], reverse=True)
+        
+        # Log diversity stats
+        final_resume_count = len(set(r[1].get('resume_id') for r in diverse_results))
+        logger.info(f"Diverse retrieval complete: {len(diverse_results)} results from {final_resume_count}/{len(all_resume_ids)} resumes")
+        
+        return diverse_results
     
     def _semantic_search(
         self, 
@@ -2402,12 +2518,16 @@ class AdvancedRAGEngine:
             else:
                 search_k = k
             
+            # IMPROVEMENT: Enable diverse retrieval for comparison/aggregation queries
+            # This ensures ALL indexed resumes are analyzed, not just top-scoring ones
+            ensure_all_resumes = is_comparison_query or is_aggregation_query
+            
             # ENHANCEMENT 4: Hybrid search
             results = self.search_engine.search(
                 question, k=search_k, semantic_weight=semantic_weight,
                 bm25_weight=bm25_weight, resume_id=resume_id,
                 resume_name=resume_name, use_reranking=True,
-                section_filter=section_filter
+                section_filter=section_filter, ensure_all_resumes=ensure_all_resumes
             )
             
             if not results:

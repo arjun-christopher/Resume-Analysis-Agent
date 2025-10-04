@@ -728,20 +728,37 @@ def extract_comprehensive_entities(text: str, hyperlinks_data: Optional[Dict] = 
             executor.submit(run_supplementary): 'supplementary'
         }
         
-        for future in as_completed(futures, timeout=60):  # 60 second timeout
+        completed_count = 0
+        total_count = len(futures)
+        
+        for future in as_completed(futures, timeout=120):  # Increased to 120 second timeout
             try:
-                result = future.result(timeout=5)  # 5 second timeout per task
+                result = future.result(timeout=30)  # Increased to 30 second timeout per task
                 extraction_results[result[0]] = result[1:]
+                completed_count += 1
             except Exception as e:
                 # If extraction fails, log and continue with empty results
                 task_name = futures.get(future, 'unknown')
                 print(f"Warning: {task_name} extraction failed: {e}")
                 extraction_results[task_name] = None
+                completed_count += 1
+        
+        # Check if all futures completed
+        if completed_count < total_count:
+            print(f"Warning: Only {completed_count}/{total_count} extraction tasks completed")
     except KeyboardInterrupt:
         # Graceful shutdown on interrupt
         print("\n  Stopping parallel extraction...")
         executor.shutdown(wait=False, cancel_futures=True)
         raise
+    except TimeoutError as e:
+        # Handle timeout specifically
+        print(f"Timeout in parallel extraction after 120s: {e}")
+        print("  Note: Some extraction tasks are taking longer than expected.")
+        # Cancel remaining futures
+        for future in futures.keys():
+            if not future.done():
+                future.cancel()
     except Exception as e:
         print(f"Error in parallel extraction: {e}")
     finally:

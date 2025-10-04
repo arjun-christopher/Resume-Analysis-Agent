@@ -87,7 +87,7 @@ graph TB
 ### Core Capabilities
 
 - **Multi-format Processing**: PDF and DOCX support with advanced text extraction
-- **Intelligent Entity Extraction**: Skills, education, experience, certifications, projects, publications, achievements, activities, and more
+- **Intelligent Entity Extraction**: Skills, education, experience, certifications (with level detection and acronym expansion), projects, publications, achievements, activities, and more
 - **Extended Response Length**: Up to 4096 tokens per response for comprehensive analysis and detailed answers
 - **Real-time Analysis**: Fast processing and querying with optimized parallel document ingestion
 - **Web Interface**: User-friendly Streamlit application with interactive chat and session management
@@ -97,15 +97,20 @@ graph TB
 #### Hybrid Retrieval System
 Combines the best of both worlds for superior search accuracy:
 
-- **Semantic Search (Dense Retrieval)**: 
-  - Uses FastEmbed with BAAI/bge-small-en-v1.5 embeddings
-  - FAISS vector similarity search for conceptual matching
+- **Enhanced Semantic Search (Dense Retrieval)**: 
+  - Uses FastEmbed with BAAI/bge-small-en-v1.5 embeddings (384 dimensions)
+  - Asymmetric instruction prefixes: "Represent this resume query/passage for retrieval"
+  - FAISS vector similarity search with L2 normalization
+  - Multi-metric similarity scoring (cosine, euclidean, dot product ensemble)
   - Understands context and meaning, not just keywords
   
-- **Keyword Search (Sparse Retrieval)**:
-  - BM25Okapi algorithm for precise term matching
+- **Enhanced Keyword Search (Sparse Retrieval)**:
+  - BM25Okapi with advanced tokenization pipeline
+  - Stop word filtering (24 common words)
+  - Simple stemming for morphological variants
+  - Protected technical terms (Python, Kubernetes, AWS, etc.)
+  - Bigram generation for phrase matching
   - Excellent for technical terms, acronyms, and specific phrases
-  - Handles exact matches that semantic search might miss
 
 - **Weighted Fusion Strategy**:
   - Default: 70% semantic + 30% keyword (configurable)
@@ -118,23 +123,33 @@ Combines the best of both worlds for superior search accuracy:
   - Synonym and term variation substitution
   - Increases recall without sacrificing precision
 
+- **Diverse Retrieval Guarantee**:
+  - Ensures at least one result from every indexed resume
+  - Critical for fair candidate comparison queries
+  - Prevents high-scoring resumes from dominating results
+  - Automatically enabled for comparison/aggregation queries
+
 **Performance**: Maintains sub-second response times through efficient indexing and parallel retrieval.
 
 #### Cross-Encoder Reranking
-Two-stage retrieval for maximum precision:
+Two-stage retrieval with intelligent optimization for maximum precision:
 
 - **Stage 1: Bi-Encoder Retrieval**
   - Fast initial retrieval of top N*3 candidates
   - Broad coverage with acceptable accuracy
   
-- **Stage 2: Cross-Encoder Reranking**
+- **Stage 2: Smart Cross-Encoder Reranking**
   - Model: `cross-encoder/ms-marco-MiniLM-L-6-v2`
   - Processes query + document pairs together
   - More accurate scoring (but more expensive)
   - Re-ranks top candidates to surface best matches
-  - Can be disabled for faster responses (configurable)
+  
+- **Intelligent Optimization**:
+  - **Score Caching**: LRU cache for repeated query-document pairs (max 1000 entries)
+  - **Ambiguity Detection**: Skips reranking when scores are clearly separated (CV < 0.5)
+  - Can be disabled entirely for faster responses (configurable)
 
-**Trade-off**: Adds ~100-200ms latency for significantly improved relevance (10-15% accuracy boost).
+**Trade-off**: Adds ~100-200ms latency for first-time queries, but significantly improved relevance and repeat-query performance.
 
 #### Aggregation & Deduplication
 Intelligent result processing for cleaner outputs:
@@ -229,7 +244,8 @@ Resume-Analysis-Agent/
 ├── .env                                   # Environment configuration (not in git)
 ├── .gitignore                             # Git ignore patterns
 ├── LICENSE                                # MIT license file
-├── README.md                              # Project documentation
+├── README.md                              # Project documentation (quick start guide)
+├── TECHNICAL_DOCUMENTATION.md             # Comprehensive A-Z technical reference
 ├── requirements.txt                       # Python dependencies specification
 └── setup.py                               # Automated installation & setup script
 ```
@@ -245,12 +261,23 @@ Resume-Analysis-Agent/
 **app/parser.py** - Central document processing engine
 - Text extraction from PDF/DOCX formats
 - Document structure analysis and section detection
+- Section-aware semantic chunking with optimal sizes:
+  - Skills: 256 tokens with 17% overlap
+  - Experience: 512 tokens with 17% overlap  
+  - Education/Projects: 384 tokens with 17% overlap
+- Parallel entity extraction with ThreadPoolExecutor (max 6 workers)
+- Timeout protection (300s) and graceful error handling
 - Entity recognition coordination
 - Metadata extraction and preservation
 
 **app/rag_engine.py** - Advanced RAG implementation
-- Section-based intelligent chunking with variable chunk sizes
-- Hybrid search combining semantic + keyword matching
+- Section-aware intelligent chunking with optimal sizes per section type
+  - Skills: 256 tokens, Experience: 512 tokens, Education/Projects: 384 tokens
+  - 17% overlap for context continuity
+- Hybrid search combining enhanced semantic + keyword matching
+- Smart cross-encoder reranking with score caching (1000-entry LRU cache)
+- Multi-metric similarity ensemble (cosine 50%, euclidean 20%, dot product 30%)
+- Diverse retrieval guarantee for fair candidate comparison
 - Multi-LLM provider support with fallback mechanisms
 - Vector storage and retrieval optimization (FAISS/Qdrant)
 - Query expansion with domain-specific synonyms
@@ -440,5 +467,15 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 For questions, issues, or feature requests:
 
 - **GitHub Issues**: [Create an issue](https://github.com/arjun-christopher/Resume-Analysis-Agent/issues)
-- **Documentation**: Check this README and inline code documentation
-- **Community**: Join discussions in GitHub Discussions
+- **Documentation**: 
+  - **Quick Start**: This README for installation and basic usage
+  - **Technical Reference**: [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) - Comprehensive A-Z guide covering:
+    - System architecture and design patterns
+    - NLP and entity extraction (all 13 extractors)
+    - RAG engine internals (embeddings, hybrid search, reranking)
+    - LLM integration and prompt engineering
+    - Performance optimization and caching strategies
+    - Data processing and storage mechanisms
+    - API design and interface implementation
+    - Testing, debugging, and troubleshooting
+  - **Code Documentation**: Inline docstrings in source files

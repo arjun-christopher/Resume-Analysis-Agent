@@ -423,11 +423,37 @@ def extract_certification_info(text: str) -> List[Dict[str, Any]]:
     """Extract certification information from text with comprehensive pattern matching"""
     certifications = []
     
+    # IMPROVEMENT: Define false positive patterns to filter out
+    false_positive_patterns = [
+        r'\b(?:Bachelor|Master|PhD|B\.?S\.?|M\.?S\.?|M\.?B\.?A\.?|B\.?A\.?|Associate Degree)s?\b',  # Degrees
+        r'\b(?:University|College|Institute|School)\b',  # Educational institutions
+        r'\b(?:Senior|Junior|Lead|Principal|Staff|Chief)\s+(?:Engineer|Developer|Analyst|Manager|Architect|Consultant|Administrator|Specialist)\b',  # Job titles with seniority
+        r'\b(?:Full[- ]?Stack|Front[- ]?End|Back[- ]?End)\s+(?:Developer|Engineer)\b',  # Role descriptions
+        r'\bCertified\s+(?:Java|Python|Ruby|JavaScript|C\+\+|C#|PHP|Golang|Rust|Swift|Kotlin)\s+(?:Developer|Programmer|Engineer)\b',  # Generic "Certified X Developer"
+        r'\b(?:Certified|Professional)\s+in\s+[A-Za-z\s]{1,30}$',  # Incomplete certification mentions
+    ]
+    compiled_false_positive = [re.compile(p, re.IGNORECASE) for p in false_positive_patterns]
+    
     for cert_type, patterns in COMPILED_CERT_PATTERNS.items():
         for pattern in patterns:
             matches = pattern.finditer(text)
             for match in matches:
                 cert_text = match.group(0)
+                
+                # IMPROVEMENT: Skip if matches false positive patterns
+                is_false_positive = False
+                for fp_pattern in compiled_false_positive:
+                    if fp_pattern.search(cert_text):
+                        is_false_positive = True
+                        break
+                
+                if is_false_positive:
+                    continue
+                
+                # IMPROVEMENT: Validate minimum certification name length
+                if len(cert_text.strip()) < 3:
+                    continue
+                
                 start_pos = match.start()
                 end_pos = match.end()
                 
@@ -446,6 +472,17 @@ def extract_certification_info(text: str) -> List[Dict[str, Any]]:
                 # Standardize acronyms
                 standardized_name = standardize_certification_name(cert_text)
                 
+                # IMPROVEMENT: Calculate confidence based on context quality
+                confidence = 0.85  # Base confidence for regex matches
+                
+                # Boost confidence if certification appears in a certification section
+                if re.search(r'\b(?:certification|certificate|license|credential)s?\b', context[:100], re.IGNORECASE):
+                    confidence = min(1.0, confidence + 0.1)
+                
+                # Reduce confidence if in work experience section (might be requirement, not actual cert)
+                if re.search(r'\b(?:experience|work history|employment|position|role)\b', context[:100], re.IGNORECASE):
+                    confidence = max(0.5, confidence - 0.15)
+                
                 cert_info = {
                     'certification_type': cert_type,
                     'certification_name': standardized_name,
@@ -453,7 +490,7 @@ def extract_certification_info(text: str) -> List[Dict[str, Any]]:
                     'certification_level': cert_level,
                     'context': context,
                     'position': (start_pos, end_pos),
-                    'confidence': 0.85  # Base confidence for regex matches
+                    'confidence': confidence
                 }
                 
                 certifications.append(cert_info)
@@ -650,7 +687,7 @@ def extract_verification_url(context: str) -> Optional[str]:
 
 
 def calculate_cert_similarity(cert1: Dict[str, Any], cert2: Dict[str, Any]) -> float:
-    """Calculate similarity between two certification entries"""
+    """Calculate similarity between two certification entries with improved accuracy"""
     score = 0.0
     
     # Name similarity (most important)
@@ -658,33 +695,51 @@ def calculate_cert_similarity(cert1: Dict[str, Any], cert2: Dict[str, Any]) -> f
     name2 = cert2.get('certification_name', '').lower()
     
     if name1 and name2:
-        # Simple token-based similarity
-        tokens1 = set(name1.split())
-        tokens2 = set(name2.split())
-        if tokens1 and tokens2:
-            intersection = len(tokens1 & tokens2)
-            union = len(tokens1 | tokens2)
-            token_sim = intersection / union if union > 0 else 0
-            score += token_sim * 0.6
+        # IMPROVEMENT: Check for exact or substring match first (high confidence)
+        if name1 == name2:
+            score += 0.7
+        elif name1 in name2 or name2 in name1:
+            # Only if the shorter name is at least 60% of the longer
+            shorter_len = min(len(name1), len(name2))
+            longer_len = max(len(name1), len(name2))
+            if shorter_len / longer_len >= 0.6:
+                score += 0.6
+        else:
+            # Token-based similarity for different variations
+            tokens1 = set(name1.split())
+            tokens2 = set(name2.split())
+            if tokens1 and tokens2:
+                intersection = len(tokens1 & tokens2)
+                union = len(tokens1 | tokens2)
+                token_sim = intersection / union if union > 0 else 0
+                # IMPROVEMENT: Require higher token similarity (70% instead of allowing any overlap)
+                if token_sim >= 0.7:
+                    score += token_sim * 0.5
     
-    # Position proximity
+    # Position proximity (less weight)
     pos1 = cert1.get('position', (0, 0))
     pos2 = cert2.get('position', (0, 0))
     position_distance = abs(pos1[0] - pos2[0])
-    if position_distance < 100:
-        score += 0.3
-    elif position_distance < 300:
+    if position_distance < 50:  # Very close (same line area)
         score += 0.2
+    elif position_distance < 200:  # Nearby (same paragraph)
+        score += 0.1
     
-    # Same type
+    # Same type adds confidence
     if cert1.get('certification_type') == cert2.get('certification_type'):
         score += 0.1
+    
+    # IMPROVEMENT: Penalize if confidence scores differ significantly
+    conf1 = cert1.get('confidence', 0.5)
+    conf2 = cert2.get('confidence', 0.5)
+    if abs(conf1 - conf2) > 0.3:
+        score *= 0.8  # Reduce overall score if confidence mismatch
     
     return score
 
 
 def merge_certification_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Merge duplicate or overlapping certification entries using similarity scoring"""
+    """Merge duplicate or overlapping certification entries using improved similarity scoring"""
     if not entries:
         return []
     
@@ -706,15 +761,17 @@ def merge_certification_entries(entries: List[Dict[str, Any]]) -> List[Dict[str,
             
             other = entries[j]
             
-            # IMPROVEMENT: Use similarity scoring instead of just position
+            # IMPROVEMENT: Use stricter similarity threshold to reduce false merges
             similarity = calculate_cert_similarity(entry, other)
             
-            if similarity >= 0.5:  # 50% similarity threshold
+            if similarity >= 0.65:  # Increased from 0.5 to 0.65 for stricter matching
                 similar_entries.append(other)
                 skip_indices.add(j)
         
         # Merge all similar entries, keeping most complete information
         if len(similar_entries) > 1:
+            # IMPROVEMENT: Start with entry that has highest confidence
+            similar_entries.sort(key=lambda x: x.get('confidence', 0), reverse=True)
             merged_entry = similar_entries[0].copy()
             
             for other_entry in similar_entries[1:]:
@@ -728,8 +785,8 @@ def merge_certification_entries(entries: List[Dict[str, Any]]) -> List[Dict[str,
                         if other_entry.get('confidence', 0) > merged_entry.get('confidence', 0):
                             merged_entry[key] = other_entry[key]
                 
-                # Boost confidence if multiple sources agree
-                merged_entry['confidence'] = min(1.0, merged_entry.get('confidence', 0.5) + 0.15)
+                # IMPROVEMENT: More conservative confidence boost for merged entries
+                merged_entry['confidence'] = min(1.0, merged_entry.get('confidence', 0.5) + 0.10)
             
             merged.append(merged_entry)
         else:
@@ -1028,6 +1085,11 @@ def extract_certifications_comprehensive(text: str) -> List[Dict[str, Any]]:
     final_entries = []
     for entry in certification_entries:
         entry.pop('position', None)
+        
+        # IMPROVEMENT: Filter out low-confidence entries (likely false positives)
+        if entry.get('confidence', 0) < 0.6:
+            continue
+        
         cleaned_entry = {k: v for k, v in entry.items() if v}
         
         if cleaned_entry.get('certification_name') or cleaned_entry.get('issuer'):
