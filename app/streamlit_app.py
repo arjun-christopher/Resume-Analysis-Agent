@@ -5,6 +5,8 @@ import sys
 import os
 from pathlib import Path
 import time
+import signal
+import atexit
 from typing import List, Dict, Any
 
 import streamlit as st
@@ -16,6 +18,34 @@ from parser import extract_docs_to_chunks_and_records
 from rag_engine import create_advanced_rag_engine
 
 load_dotenv()
+
+# Register cleanup handlers for graceful shutdown
+def cleanup_on_exit():
+    """Cleanup function to handle graceful shutdown"""
+    try:
+        # Suppress event loop errors during shutdown
+        import warnings
+        warnings.filterwarnings('ignore', category=RuntimeWarning)
+        warnings.filterwarnings('ignore', message='Event loop is closed')
+    except:
+        pass
+
+# Register the cleanup function
+atexit.register(cleanup_on_exit)
+
+# Handle SIGTERM gracefully (for container environments)
+def handle_sigterm(signum, frame):
+    """Handle SIGTERM signal for graceful shutdown"""
+    print("\nReceived termination signal, shutting down gracefully...")
+    cleanup_on_exit()
+    sys.exit(0)
+
+try:
+    signal.signal(signal.SIGTERM, handle_sigterm)
+except (AttributeError, ValueError):
+    # Signals not available in all environments (e.g., Windows)
+    pass
+
 st.set_page_config(page_title="Resume Analysis Agent", layout="wide")
 
 DATA_DIR = Path("data")

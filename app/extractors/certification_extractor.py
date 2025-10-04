@@ -300,8 +300,37 @@ CERTIFICATION_SECTION_HEADERS = [
 # Verification URL patterns
 VERIFICATION_URL_PATTERNS = [
     r'(?:Verify|Verification|View|Link|URL)[\s:]*(?:https?://[^\s]+)',
-    r'https?://(?:www\.)?(?:credly\.com|acclaim\.com|certmetrics\.com|verify\.[^\s]+)',
+    r'https?://(?:www\.)?(?:credly\.com|acclaim\.com|certmetrics\.com|verify\.[^\s]+|badgr\.com|youracclaim\.com)',
 ]
+
+# Certification levels/tiers for ranking
+CERTIFICATION_LEVELS = {
+    'entry': ['foundation', 'fundamentals', 'essentials', 'entry', 'associate', 'certified associate'],
+    'intermediate': ['intermediate', 'professional', 'practitioner', 'specialist', 'developer', 'administrator'],
+    'advanced': ['advanced', 'expert', 'master', 'architect', 'senior', 'lead'],
+    'specialty': ['specialty', 'specialized', 'security', 'devops', 'data engineer', 'ml engineer']
+}
+
+# Certification acronym standardization
+CERTIFICATION_ACRONYMS = {
+    'cka': 'Certified Kubernetes Administrator',
+    'ckad': 'Certified Kubernetes Application Developer',
+    'cks': 'Certified Kubernetes Security Specialist',
+    'aws saa': 'AWS Solutions Architect Associate',
+    'aws sap': 'AWS Solutions Architect Professional',
+    'az-104': 'Microsoft Azure Administrator',
+    'az-204': 'Microsoft Azure Developer',
+    'az-303': 'Microsoft Azure Architect Technologies',
+    'az-304': 'Microsoft Azure Architect Design',
+    'pmp': 'Project Management Professional',
+    'csm': 'Certified Scrum Master',
+    'psm': 'Professional Scrum Master',
+    'cissp': 'Certified Information Systems Security Professional',
+    'cism': 'Certified Information Security Manager',
+    'cisa': 'Certified Information Systems Auditor',
+    'ceh': 'Certified Ethical Hacker',
+    'oscp': 'Offensive Security Certified Professional',
+}
 
 # Compile certification patterns
 COMPILED_CERT_PATTERNS = {}
@@ -402,21 +431,59 @@ def extract_certification_info(text: str) -> List[Dict[str, Any]]:
                 start_pos = match.start()
                 end_pos = match.end()
                 
-                # Extract surrounding context (300 chars before and after)
-                context_start = max(0, start_pos - 300)
-                context_end = min(len(text), end_pos + 300)
-                context = text[context_start:context_end]
+                # IMPROVEMENT: Extract multi-line context (look for complete lines)
+                # Find line boundaries for better context
+                lines_before_start = text[:start_pos].rfind('\n', max(0, start_pos - 500))
+                lines_after_end = text[end_pos:].find('\n\n', 0, min(500, len(text) - end_pos))
+                
+                context_start = max(0, lines_before_start if lines_before_start != -1 else start_pos - 400)
+                context_end = min(len(text), end_pos + lines_after_end if lines_after_end != -1 else end_pos + 400)
+                context = text[context_start:context_end].strip()
+                
+                # Extract certification level
+                cert_level = extract_certification_level(cert_text)
+                
+                # Standardize acronyms
+                standardized_name = standardize_certification_name(cert_text)
                 
                 cert_info = {
                     'certification_type': cert_type,
-                    'certification_name': cert_text.strip(),
+                    'certification_name': standardized_name,
+                    'original_name': cert_text.strip(),
+                    'certification_level': cert_level,
                     'context': context,
-                    'position': (start_pos, end_pos)
+                    'position': (start_pos, end_pos),
+                    'confidence': 0.85  # Base confidence for regex matches
                 }
                 
                 certifications.append(cert_info)
     
     return certifications
+
+
+def extract_certification_level(cert_name: str) -> str:
+    """Extract certification level/tier from name"""
+    cert_lower = cert_name.lower()
+    
+    for level, keywords in CERTIFICATION_LEVELS.items():
+        for keyword in keywords:
+            if keyword in cert_lower:
+                return level
+    
+    return 'intermediate'  # Default level
+
+
+def standardize_certification_name(cert_name: str) -> str:
+    """Standardize certification names from acronyms"""
+    cert_lower = cert_name.lower().strip()
+    
+    # Check if it's a known acronym
+    for acronym, full_name in CERTIFICATION_ACRONYMS.items():
+        if cert_lower == acronym or cert_lower.startswith(acronym + ' '):
+            return full_name
+    
+    # Clean up whitespace and return original
+    return re.sub(r'\s+', ' ', cert_name).strip()
 
 
 def extract_certification_issuer(context: str) -> Optional[str]:
@@ -455,12 +522,13 @@ def extract_certification_id(context: str) -> Optional[str]:
 
 
 def extract_certification_dates(context: str) -> Dict[str, Optional[str]]:
-    """Extract issue and expiration dates from certification context"""
+    """Extract issue and expiration dates from certification context with validation"""
     dates = {
         'issue_date': None,
         'expiry_date': None,
         'is_active': True,
-        'no_expiration': False
+        'no_expiration': False,
+        'validity_years': None
     }
     
     # Check for issue date
@@ -469,42 +537,103 @@ def extract_certification_dates(context: str) -> Dict[str, Optional[str]]:
         if match:
             if match.lastindex >= 2:
                 # Date range found
-                dates['issue_date'] = match.group(1).strip()
-                expiry = match.group(2).strip()
+                issue_date_raw = match.group(1).strip()
+                expiry_raw = match.group(2).strip()
                 
-                if expiry.lower() in ['present', 'current', 'no expiration']:
+                # Validate and standardize issue date
+                dates['issue_date'] = standardize_date(issue_date_raw)
+                
+                if expiry_raw.lower() in ['present', 'current', 'no expiration']:
                     dates['no_expiration'] = True
                 else:
-                    dates['expiry_date'] = expiry
+                    dates['expiry_date'] = standardize_date(expiry_raw)
                 break
             elif match.lastindex == 1:
                 # Single date found
-                dates['issue_date'] = match.group(1).strip()
+                dates['issue_date'] = standardize_date(match.group(1).strip())
     
     # Check for expiration date separately
     for pattern in COMPILED_CERT_EXPIRY_PATTERNS:
         match = pattern.search(context)
         if match:
-            if 'no expiration' in match.group(0).lower() or 'does not expire' in match.group(0).lower() or 'never expires' in match.group(0).lower():
+            if 'no expiration' in match.group(0).lower() or 'does not expire' in match.group(0).lower() or 'never expires' in match.group(0).lower() or 'lifetime' in match.group(0).lower():
                 dates['no_expiration'] = True
                 dates['expiry_date'] = 'No Expiration'
             elif match.lastindex >= 1:
-                dates['expiry_date'] = match.group(1).strip()
+                dates['expiry_date'] = standardize_date(match.group(1).strip())
             break
     
-    # Determine if certification is active
-    if dates['expiry_date'] and dates['expiry_date'] != 'No Expiration':
-        try:
-            import datetime
+    # IMPROVEMENT: Calculate validity years and determine if certification is active
+    try:
+        import datetime
+        current_year = datetime.datetime.now().year
+        current_month = datetime.datetime.now().month
+        
+        # Extract years from dates
+        issue_year = None
+        issue_month = None
+        if dates['issue_date']:
+            year_match = re.search(r'\d{4}', dates['issue_date'])
+            if year_match:
+                issue_year = int(year_match.group(0))
+                # Try to extract month
+                month_match = re.search(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)', dates['issue_date'], re.IGNORECASE)
+                if month_match:
+                    month_names = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+                                 'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12}
+                    issue_month = month_names.get(month_match.group(1)[:3].lower(), None)
+        
+        if dates['expiry_date'] and dates['expiry_date'] != 'No Expiration':
+            expiry_year = None
+            expiry_month = None
             year_match = re.search(r'\d{4}', dates['expiry_date'])
             if year_match:
                 expiry_year = int(year_match.group(0))
-                current_year = datetime.datetime.now().year
-                dates['is_active'] = expiry_year >= current_year
-        except:
-            pass
+                # Try to extract month
+                month_match = re.search(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)', dates['expiry_date'], re.IGNORECASE)
+                if month_match:
+                    month_names = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+                                 'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12}
+                    expiry_month = month_names.get(month_match.group(1)[:3].lower(), None)
+            
+            # Determine if active based on year and month
+            if expiry_year:
+                if expiry_year > current_year:
+                    dates['is_active'] = True
+                elif expiry_year == current_year and expiry_month and expiry_month >= current_month:
+                    dates['is_active'] = True
+                elif expiry_year == current_year and not expiry_month:
+                    dates['is_active'] = True  # Assume still valid if only year matches
+                else:
+                    dates['is_active'] = False
+            
+            # Calculate validity period
+            if issue_year and expiry_year:
+                dates['validity_years'] = expiry_year - issue_year
+    except Exception as e:
+        # If date parsing fails, assume active
+        pass
     
     return dates
+
+
+def standardize_date(date_str: str) -> str:
+    """Standardize date format for consistency"""
+    if not date_str:
+        return date_str
+    
+    # Try to parse and reformat common date patterns
+    # MM/YYYY -> Mon YYYY
+    match = re.match(r'(\d{1,2})/(\d{4})', date_str)
+    if match:
+        month_num = int(match.group(1))
+        year = match.group(2)
+        month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        if 1 <= month_num <= 12:
+            return f"{month_names[month_num-1]} {year}"
+    
+    # Already in good format, just clean up
+    return re.sub(r'\s+', ' ', date_str).strip()
 
 
 def extract_verification_url(context: str) -> Optional[str]:
@@ -520,8 +649,42 @@ def extract_verification_url(context: str) -> Optional[str]:
     return None
 
 
+def calculate_cert_similarity(cert1: Dict[str, Any], cert2: Dict[str, Any]) -> float:
+    """Calculate similarity between two certification entries"""
+    score = 0.0
+    
+    # Name similarity (most important)
+    name1 = cert1.get('certification_name', '').lower()
+    name2 = cert2.get('certification_name', '').lower()
+    
+    if name1 and name2:
+        # Simple token-based similarity
+        tokens1 = set(name1.split())
+        tokens2 = set(name2.split())
+        if tokens1 and tokens2:
+            intersection = len(tokens1 & tokens2)
+            union = len(tokens1 | tokens2)
+            token_sim = intersection / union if union > 0 else 0
+            score += token_sim * 0.6
+    
+    # Position proximity
+    pos1 = cert1.get('position', (0, 0))
+    pos2 = cert2.get('position', (0, 0))
+    position_distance = abs(pos1[0] - pos2[0])
+    if position_distance < 100:
+        score += 0.3
+    elif position_distance < 300:
+        score += 0.2
+    
+    # Same type
+    if cert1.get('certification_type') == cert2.get('certification_type'):
+        score += 0.1
+    
+    return score
+
+
 def merge_certification_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Merge duplicate or overlapping certification entries"""
+    """Merge duplicate or overlapping certification entries using similarity scoring"""
     if not entries:
         return []
     
@@ -534,31 +697,43 @@ def merge_certification_entries(entries: List[Dict[str, Any]]) -> List[Dict[str,
         if i in skip_indices:
             continue
         
+        # Find all similar entries
+        similar_entries = [entry]
+        
         for j in range(i + 1, len(entries)):
             if j in skip_indices:
                 continue
             
             other = entries[j]
-            pos1 = entry.get('position', (0, 0))
-            pos2 = other.get('position', (0, 0))
             
-            # Check if positions overlap or are very close (within 200 chars)
-            if abs(pos1[0] - pos2[0]) < 200:
-                # Merge entries - keep more complete information
-                if not entry.get('issuer') and other.get('issuer'):
-                    entry['issuer'] = other['issuer']
-                if not entry.get('certification_id') and other.get('certification_id'):
-                    entry['certification_id'] = other['certification_id']
-                if not entry.get('issue_date') and other.get('issue_date'):
-                    entry['issue_date'] = other['issue_date']
-                if not entry.get('expiry_date') and other.get('expiry_date'):
-                    entry['expiry_date'] = other['expiry_date']
-                if not entry.get('verification_url') and other.get('verification_url'):
-                    entry['verification_url'] = other['verification_url']
-                
+            # IMPROVEMENT: Use similarity scoring instead of just position
+            similarity = calculate_cert_similarity(entry, other)
+            
+            if similarity >= 0.5:  # 50% similarity threshold
+                similar_entries.append(other)
                 skip_indices.add(j)
         
-        merged.append(entry)
+        # Merge all similar entries, keeping most complete information
+        if len(similar_entries) > 1:
+            merged_entry = similar_entries[0].copy()
+            
+            for other_entry in similar_entries[1:]:
+                # Merge fields, preferring non-null values with higher confidence
+                for key in ['issuer', 'certification_id', 'issue_date', 'expiry_date', 
+                           'verification_url', 'certification_level', 'validity_years']:
+                    if not merged_entry.get(key) and other_entry.get(key):
+                        merged_entry[key] = other_entry[key]
+                    elif merged_entry.get(key) and other_entry.get(key):
+                        # Both have value, prefer one with higher confidence
+                        if other_entry.get('confidence', 0) > merged_entry.get('confidence', 0):
+                            merged_entry[key] = other_entry[key]
+                
+                # Boost confidence if multiple sources agree
+                merged_entry['confidence'] = min(1.0, merged_entry.get('confidence', 0.5) + 0.15)
+            
+            merged.append(merged_entry)
+        else:
+            merged.append(entry)
     
     return merged
 
@@ -788,31 +963,62 @@ def extract_certifications_comprehensive(text: str) -> List[Dict[str, Any]]:
         flashtext_entries = extract_certifications_with_flashtext(text)
         
         for flashtext_entry in flashtext_entries:
-            # Check for duplicates
+            # IMPROVEMENT: Use similarity check instead of simple substring
             is_duplicate = False
+            best_match_score = 0
+            
             for existing in certification_entries:
-                if (flashtext_entry.get('name') and existing.get('certification_name') and
-                    flashtext_entry['name'].lower() in existing['certification_name'].lower()):
-                    is_duplicate = True
-                    break
+                # Calculate similarity
+                if flashtext_entry.get('name') and existing.get('certification_name'):
+                    name1 = flashtext_entry['name'].lower()
+                    name2 = existing['certification_name'].lower()
+                    
+                    # Check overlap
+                    if name1 in name2 or name2 in name1:
+                        is_duplicate = True
+                        break
+                    
+                    # Token-based similarity
+                    tokens1 = set(name1.split())
+                    tokens2 = set(name2.split())
+                    if tokens1 and tokens2:
+                        overlap = len(tokens1 & tokens2) / len(tokens1 | tokens2)
+                        if overlap > 0.6:  # 60% token overlap
+                            is_duplicate = True
+                            # Enrich existing entry with flashtext data
+                            if not existing.get('certification_id') and flashtext_entry.get('certification_id'):
+                                existing['certification_id'] = flashtext_entry['certification_id']
+                            break
             
             if not is_duplicate:
+                # Rename 'name' to 'certification_name' for consistency
+                flashtext_entry['certification_name'] = flashtext_entry.pop('name', 'Unknown')
                 certification_entries.append(flashtext_entry)
     
     # Step 3.75: Add fuzzy matching for typo handling
     if _RAPIDFUZZ_AVAILABLE:
-        fuzzy_entries = extract_certifications_with_fuzzy_matching(text)
+        fuzzy_entries = extract_certifications_with_fuzzy_matching(text, min_score=85)  # Slightly lower threshold
         
         for fuzzy_entry in fuzzy_entries:
-            # Check for duplicates
+            # Check for duplicates with similarity scoring
             is_duplicate = False
+            
             for existing in certification_entries:
-                if (fuzzy_entry.get('name') and existing.get('certification_name') and
-                    fuzzy_entry['name'].lower() in existing['certification_name'].lower()):
-                    is_duplicate = True
-                    break
+                if fuzzy_entry.get('name') and existing.get('certification_name'):
+                    name1 = fuzzy_entry['name'].lower()
+                    name2 = existing['certification_name'].lower()
+                    
+                    # Check if very similar
+                    if name1 in name2 or name2 in name1:
+                        is_duplicate = True
+                        # Boost confidence of existing if fuzzy match confirms
+                        if fuzzy_entry.get('confidence', 0) >= 0.85:
+                            existing['confidence'] = min(1.0, existing.get('confidence', 0.5) + 0.1)
+                        break
             
             if not is_duplicate:
+                # Rename 'name' to 'certification_name' for consistency
+                fuzzy_entry['certification_name'] = fuzzy_entry.pop('name', 'Unknown')
                 certification_entries.append(fuzzy_entry)
     
     # Step 4: Merge duplicate entries
