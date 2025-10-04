@@ -103,19 +103,28 @@ with st.sidebar:
 
             # Only index new files
             if new_files:
-                with st.spinner(f"Indexing {len(new_files)} new file(s)..."):
-                    chunks, metas, records = extract_docs_to_chunks_and_records(new_files)
-                    
-                    if chunks:
-                        # Convert to the format expected by fast semantic RAG
-                        documents = [chunk.page_content if hasattr(chunk, 'page_content') else str(chunk) for chunk in chunks]
-                        metadata = [meta for meta in metas]
+                try:
+                    with st.spinner(f"Indexing {len(new_files)} new file(s)..."):
+                        chunks, metas, records = extract_docs_to_chunks_and_records(new_files)
                         
-                        st.session_state.agent.add_documents(documents, metadata)
-                
-                processing_time = time.time() - start
-                st.success(f"✅ Indexed {len(new_files)} new file(s) in {processing_time:.2f}s")
-                st.info(f"Total: {len(st.session_state.indexed_files)}/{MAX_FILES_PER_SESSION} files in session")
+                        if chunks:
+                            # Convert to the format expected by fast semantic RAG
+                            documents = [chunk.page_content if hasattr(chunk, 'page_content') else str(chunk) for chunk in chunks]
+                            metadata = [meta for meta in metas]
+                            
+                            st.session_state.agent.add_documents(documents, metadata)
+                    
+                    processing_time = time.time() - start
+                    st.success(f"Indexed {len(new_files)} new file(s) in {processing_time:.2f}s")
+                    st.info(f"Total: {len(st.session_state.indexed_files)}/{MAX_FILES_PER_SESSION} files in session")
+                except Exception as e:
+                    st.error(f"Error indexing files: {str(e)}")
+                    import traceback
+                    with st.expander("Error Details"):
+                        st.code(traceback.format_exc())
+                    # Remove failed files from indexed set
+                    for nf in new_files:
+                        st.session_state.indexed_files.discard(nf.name)
             else:
                 st.info(f"All {len(saved_files)} file(s) already indexed, skipping re-indexing")
 
@@ -227,58 +236,66 @@ if prompt:
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Analyzing resume(s)..."):
-            # Use advanced RAG system
-            result = st.session_state.agent.query(prompt)
+        try:
+            with st.spinner("Analyzing resume(s)..."):
+                # Use advanced RAG system
+                result = st.session_state.agent.query(prompt)
+                
+                # Display main response
+                st.markdown(result["answer"])
+                
+                # Show additional metadata if multi-resume query
+                if result.get('grouped_by_resume'):
+                    resume_count = result.get('resume_count', 0)
+                    st.info(f"ℹ️ Analysis covers **{resume_count} candidates**")
+                
+                # Show source information in expandable section
+                if result.get('source_documents'):
+                    with st.expander("Source Information", expanded=False):
+                        # Group sources by candidate/resume
+                        sources_by_candidate = {}
+                        for doc in result['source_documents'][:15]:  # Show more sources
+                            candidate_name = doc.metadata.get('candidate_name')
+                            resume_name = doc.metadata.get('resume_name', 'Unknown')
+                            
+                            # Use candidate name as primary key, fallback to resume name
+                            display_key = candidate_name if candidate_name else resume_name
+                            
+                            if display_key not in sources_by_candidate:
+                                sources_by_candidate[display_key] = {
+                                    'candidate_name': candidate_name,
+                                    'resume_name': resume_name,
+                                    'sources': []
+                                }
+                            
+                            sources_by_candidate[display_key]['sources'].append({
+                                'section': doc.metadata.get('section_type', 'unknown'),
+                                'score': doc.metadata.get('relevance_score', 0),
+                                'text': doc.page_content[:200] + '...' if len(doc.page_content) > 200 else doc.page_content
+                            })
+                        
+                        # Display grouped sources with candidate names
+                        for display_key, data in sources_by_candidate.items():
+                            candidate_name = data['candidate_name']
+                            resume_name = data['resume_name']
+                            
+                            if candidate_name:
+                                st.markdown(f"### **{candidate_name}**")
+                                st.caption(f"File: {resume_name}")
+                            else:
+                                st.markdown(f"### **{resume_name}**")
+                            
+                            for source in data['sources']:
+                                st.markdown(f"- **[{source['section'].title()}]** (relevance: {source['score']:.3f})")
+                                st.caption(f"  {source['text']}")
+                            
+                            st.markdown("---")
             
-            # Display main response
-            st.markdown(result["answer"])
-            
-            # Show additional metadata if multi-resume query
-            if result.get('grouped_by_resume'):
-                resume_count = result.get('resume_count', 0)
-                st.info(f"ℹ️ Analysis covers **{resume_count} candidates**")
-            
-            # Show source information in expandable section
-            if result.get('source_documents'):
-                with st.expander("Source Information", expanded=False):
-                    # Group sources by candidate/resume
-                    sources_by_candidate = {}
-                    for doc in result['source_documents'][:15]:  # Show more sources
-                        candidate_name = doc.metadata.get('candidate_name')
-                        resume_name = doc.metadata.get('resume_name', 'Unknown')
-                        
-                        # Use candidate name as primary key, fallback to resume name
-                        display_key = candidate_name if candidate_name else resume_name
-                        
-                        if display_key not in sources_by_candidate:
-                            sources_by_candidate[display_key] = {
-                                'candidate_name': candidate_name,
-                                'resume_name': resume_name,
-                                'sources': []
-                            }
-                        
-                        sources_by_candidate[display_key]['sources'].append({
-                            'section': doc.metadata.get('section_type', 'unknown'),
-                            'score': doc.metadata.get('relevance_score', 0),
-                            'text': doc.page_content[:200] + '...' if len(doc.page_content) > 200 else doc.page_content
-                        })
-                    
-                    # Display grouped sources with candidate names
-                    for display_key, data in sources_by_candidate.items():
-                        candidate_name = data['candidate_name']
-                        resume_name = data['resume_name']
-                        
-                        if candidate_name:
-                            st.markdown(f"### **{candidate_name}**")
-                            st.caption(f"File: {resume_name}")
-                        else:
-                            st.markdown(f"### **{resume_name}**")
-                        
-                        for source in data['sources']:
-                            st.markdown(f"- **[{source['section'].title()}]** (relevance: {source['score']:.3f})")
-                            st.caption(f"  {source['text']}")
-                        
-                        st.markdown("---")
-    
-    st.session_state.history.append({"role":"assistant","text":result["answer"]})
+            st.session_state.history.append({"role":"assistant","text":result["answer"]})
+        except Exception as e:
+            error_msg = f"Error processing query: {str(e)}"
+            st.error(error_msg)
+            import traceback
+            with st.expander("Error Details"):
+                st.code(traceback.format_exc())
+            st.session_state.history.append({"role":"assistant","text":error_msg})
