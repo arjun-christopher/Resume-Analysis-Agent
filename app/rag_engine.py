@@ -123,32 +123,32 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 class QueryExpander:
-    """Expand queries with synonyms and related terms for better retrieval"""
+    """Expand queries with synonyms, intent detection, and entity disambiguation for better retrieval"""
     
-    # Domain-specific synonyms for resume queries
+    # Domain-specific synonyms for resume queries (CANONICAL FORM -> VARIATIONS)
     SYNONYMS = {
-        'experience': ['work', 'employment', 'job', 'position', 'role', 'career'],
-        'skills': ['abilities', 'competencies', 'expertise', 'proficiency', 'capabilities'],
-        'education': ['academic', 'degree', 'qualification', 'university', 'college', 'study'],
-        'projects': ['work', 'assignments', 'initiatives', 'portfolio'],
-        'certifications': ['certificates', 'licenses', 'credentials', 'qualifications'],
-        'achievements': ['accomplishments', 'awards', 'recognition', 'honors'],
-        'python': ['py', 'python3', 'python2', 'python programming'],
-        'javascript': ['js', 'ecmascript', 'node', 'nodejs', 'javascript programming'],
-        'machine learning': ['ml', 'deep learning', 'ai', 'artificial intelligence', 'neural networks'],
-        'data science': ['data analytics', 'data analysis', 'big data', 'analytics'],
-        'full stack': ['fullstack', 'full-stack', 'frontend and backend'],
-        'frontend': ['front-end', 'front end', 'ui', 'user interface', 'client-side'],
-        'backend': ['back-end', 'back end', 'server-side', 'server'],
-        'devops': ['dev ops', 'sre', 'infrastructure', 'ci/cd'],
-        'cloud': ['aws', 'azure', 'gcp', 'google cloud', 'cloud computing'],
-        'database': ['db', 'sql', 'nosql', 'data storage', 'rdbms'],
-        'agile': ['scrum', 'kanban', 'sprint', 'iterative development'],
-        'leadership': ['management', 'lead', 'manage', 'supervise', 'team lead'],
-        'years': ['yrs', 'year', 'experience'],
-        'bachelor': ['bachelors', 'bs', 'ba', 'undergraduate'],
-        'master': ['masters', 'ms', 'ma', 'graduate', 'postgraduate'],
-        'phd': ['ph.d', 'doctorate', 'doctoral'],
+        'experience': ['work', 'employment', 'job', 'position', 'role', 'career', 'work history'],
+        'skills': ['abilities', 'competencies', 'expertise', 'proficiency', 'capabilities', 'skillset'],
+        'education': ['academic', 'degree', 'qualification', 'university', 'college', 'study', 'schooling'],
+        'projects': ['work', 'assignments', 'initiatives', 'portfolio', 'project work'],
+        'certifications': ['certificates', 'licenses', 'credentials', 'qualifications', 'certified'],
+        'achievements': ['accomplishments', 'awards', 'recognition', 'honors', 'accolades'],
+        'python': ['py', 'python3', 'python2', 'python programming', 'python developer'],
+        'javascript': ['js', 'ecmascript', 'node', 'nodejs', 'javascript programming', 'js developer'],
+        'machine learning': ['ml', 'deep learning', 'ai', 'artificial intelligence', 'neural networks', 'ml engineer'],
+        'data science': ['data analytics', 'data analysis', 'big data', 'analytics', 'data scientist'],
+        'full stack': ['fullstack', 'full-stack', 'frontend and backend', 'full stack developer'],
+        'frontend': ['front-end', 'front end', 'ui', 'user interface', 'client-side', 'frontend developer'],
+        'backend': ['back-end', 'back end', 'server-side', 'server', 'backend developer'],
+        'devops': ['dev ops', 'sre', 'infrastructure', 'ci/cd', 'devops engineer'],
+        'cloud': ['aws', 'azure', 'gcp', 'google cloud', 'cloud computing', 'cloud engineer'],
+        'database': ['db', 'sql', 'nosql', 'data storage', 'rdbms', 'database admin'],
+        'agile': ['scrum', 'kanban', 'sprint', 'iterative development', 'agile methodology'],
+        'leadership': ['management', 'lead', 'manage', 'supervise', 'team lead', 'manager'],
+        'years': ['yrs', 'year', 'experience', 'years of experience'],
+        'bachelor': ['bachelors', 'bs', 'ba', 'undergraduate', "bachelor's"],
+        'master': ['masters', 'ms', 'ma', 'graduate', 'postgraduate', "master's"],
+        'phd': ['ph.d', 'doctorate', 'doctoral', 'doctor of philosophy'],
     }
     
     # Technical variations
@@ -163,6 +163,24 @@ class QueryExpander:
         'tensorflow': ['tf'],
         'pytorch': ['torch'],
     }
+    
+    # Reverse mapping for normalization (VARIATION -> CANONICAL)
+    _TERM_NORMALIZATION = {}
+    
+    @classmethod
+    def _build_normalization_map(cls):
+        """Build reverse mapping for term normalization (lazy initialization)"""
+        if not cls._TERM_NORMALIZATION:
+            for canonical, variations in {**cls.SYNONYMS, **cls.TECH_VARIATIONS}.items():
+                cls._TERM_NORMALIZATION[canonical.lower()] = canonical
+                for variation in variations:
+                    cls._TERM_NORMALIZATION[variation.lower()] = canonical
+    
+    @classmethod
+    def normalize_term(cls, term: str) -> str:
+        """Normalize a term to its canonical form"""
+        cls._build_normalization_map()
+        return cls._TERM_NORMALIZATION.get(term.lower(), term)
     
     @classmethod
     def expand_query(cls, query: str, max_expansions: int = 3) -> List[str]:
@@ -206,24 +224,55 @@ class QueryExpander:
     @classmethod
     def classify_query_type(cls, query: str) -> str:
         """
-        Classify query type for specialized retrieval
+        Classify query type for specialized retrieval with enhanced intent detection
         
         Returns:
-            'exact_match' | 'semantic' | 'hybrid' | 'comparison' | 'aggregation'
+            'ranking' | 'comparison' | 'aggregation_union' | 'aggregation_intersection' | 
+            'filtering' | 'exact_match' | 'semantic' | 'hybrid'
         """
         query_lower = query.lower()
         
-        # Exact match queries (specific years, numbers, names)
-        if any(keyword in query_lower for keyword in ['how many years', 'specific', 'exactly', 'in year']):
-            return 'exact_match'
+        # Ranking queries (top-N, best, most)
+        if any(keyword in query_lower for keyword in [
+            'top', 'best', 'most', 'highest', 'strongest', 'leading', 
+            'rank', 'order by', 'sort by', 'top-n', 'top n'
+        ]):
+            return 'ranking'
         
-        # Comparison queries
-        if any(keyword in query_lower for keyword in ['compare', 'best', 'top', 'rank', 'versus', 'vs', 'better']):
+        # Comparison queries (compare specific candidates)
+        if any(keyword in query_lower for keyword in [
+            'compare', 'versus', 'vs', 'difference between', 'better than',
+            'contrast', 'compare between'
+        ]):
             return 'comparison'
         
-        # Aggregation queries
-        if any(keyword in query_lower for keyword in ['all candidates', 'everyone', 'list all', 'total', 'count', 'how many']):
-            return 'aggregation'
+        # Aggregation - UNION (all, any, show all)
+        if any(keyword in query_lower for keyword in [
+            'all candidates', 'everyone', 'list all', 'show all', 'any candidate',
+            'find all', 'all resumes', 'everyone who'
+        ]):
+            return 'aggregation_union'
+        
+        # Aggregation - INTERSECTION (common, shared, both)
+        if any(keyword in query_lower for keyword in [
+            'common', 'shared', 'both have', 'all have', 'in common',
+            'intersection', 'overlap'
+        ]):
+            return 'aggregation_intersection'
+        
+        # Filtering queries (specific criteria)
+        if any(keyword in query_lower for keyword in [
+            'with', 'who has', 'having', 'filter', 'where', 'candidates with',
+            'those who', 'only'
+        ]):
+            return 'filtering'
+        
+        # Exact match queries (specific years, numbers, names)
+        if any(keyword in query_lower for keyword in [
+            'how many years', 'specific', 'exactly', 'in year', 'precisely',
+            'exact'
+        ]):
+            return 'exact_match'
         
         # Check for technical terms (prefer semantic)
         technical_terms = ['python', 'java', 'react', 'machine learning', 'aws', 'cloud', 'docker']
@@ -232,6 +281,66 @@ class QueryExpander:
         
         # Default: hybrid
         return 'hybrid'
+    
+    @classmethod
+    def detect_query_entities(cls, query: str) -> Dict[str, List[str]]:
+        """
+        Detect and disambiguate entities in the query (skills, roles, education, etc.)
+        
+        Returns:
+            Dictionary with entity types and detected entities
+        """
+        query_lower = query.lower()
+        entities = {
+            'skills': [],
+            'roles': [],
+            'education': [],
+            'years_experience': [],
+            'certifications': [],
+            'focus_sections': []
+        }
+        
+        # Detect skills
+        skill_keywords = ['python', 'java', 'javascript', 'react', 'angular', 'vue', 
+                         'machine learning', 'data science', 'cloud', 'aws', 'docker',
+                         'kubernetes', 'sql', 'nosql']
+        for skill in skill_keywords:
+            if skill in query_lower:
+                entities['skills'].append(cls.normalize_term(skill))
+        
+        # Detect roles
+        role_keywords = ['developer', 'engineer', 'manager', 'lead', 'architect',
+                        'analyst', 'scientist', 'designer', 'consultant']
+        for role in role_keywords:
+            if role in query_lower:
+                entities['roles'].append(role)
+        
+        # Detect education level
+        education_keywords = ['bachelor', 'master', 'phd', 'doctorate', 'degree']
+        for edu in education_keywords:
+            if edu in query_lower:
+                entities['education'].append(cls.normalize_term(edu))
+        
+        # Detect years of experience
+        import re
+        years_pattern = r'(\d+)\s*(?:\+)?\s*(?:years?|yrs?)'
+        years_matches = re.findall(years_pattern, query_lower)
+        entities['years_experience'] = [int(y) for y in years_matches]
+        
+        # Detect section focus
+        section_keywords = {
+            'experience': ['experience', 'work history', 'employment'],
+            'skills': ['skills', 'expertise', 'technologies'],
+            'education': ['education', 'academic', 'degree'],
+            'projects': ['projects', 'portfolio'],
+            'certifications': ['certification', 'certificate', 'licensed']
+        }
+        
+        for section, keywords in section_keywords.items():
+            if any(kw in query_lower for kw in keywords):
+                entities['focus_sections'].append(section)
+        
+        return entities
 
 
 class CrossEncoderReranker:
@@ -295,6 +404,216 @@ class CrossEncoderReranker:
         except Exception as e:
             logger.warning(f"Cross-encoder reranking failed: {e}")
             return documents
+
+
+# ============================================================================
+# RESULT AGGREGATION & RANKING ENGINE
+# ============================================================================
+
+class ResultAggregator:
+    """Aggregate and rank results across multiple resumes with deduplication"""
+    
+    @staticmethod
+    def aggregate_union(
+        results: List[Tuple[str, Dict[str, Any], float]],
+        top_k: int = None
+    ) -> List[Tuple[str, Dict[str, Any], float]]:
+        """
+        Union aggregation: Show all results from all resumes, deduplicated
+        
+        Args:
+            results: List of (text, metadata, score) tuples
+            top_k: Maximum number of results to return
+            
+        Returns:
+            Deduplicated and sorted results
+        """
+        if not results:
+            return []
+        
+        # Deduplicate by content similarity (exact match on text)
+        seen_texts = set()
+        deduplicated = []
+        
+        for text, metadata, score in results:
+            # Create a normalized version for comparison
+            normalized_text = ' '.join(text.lower().split())
+            
+            if normalized_text not in seen_texts:
+                seen_texts.add(normalized_text)
+                deduplicated.append((text, metadata, score))
+        
+        # Sort by score (highest first)
+        deduplicated.sort(key=lambda x: x[2], reverse=True)
+        
+        # Return top_k if specified
+        if top_k:
+            return deduplicated[:top_k]
+        return deduplicated
+    
+    @staticmethod
+    def aggregate_intersection(
+        grouped_results: Dict[str, List[Tuple[str, Dict[str, Any], float]]],
+        threshold: float = 0.7
+    ) -> List[Dict[str, Any]]:
+        """
+        Intersection aggregation: Find common skills/attributes across all resumes
+        
+        Args:
+            grouped_results: Results grouped by resume_id|resume_name
+            threshold: Similarity threshold for considering items as "common"
+            
+        Returns:
+            List of common items with metadata
+        """
+        if not grouped_results or len(grouped_results) < 2:
+            return []
+        
+        # Extract all skills/keywords from each resume
+        resume_items = {}
+        for group_key, group_results in grouped_results.items():
+            items = set()
+            for text, metadata, score in group_results:
+                # Extract keywords from text (simple word extraction)
+                words = re.findall(r'\b[A-Za-z][A-Za-z0-9+#.]+\b', text.lower())
+                # Filter for likely skills/tech (length > 2, contains letters)
+                items.update([w for w in words if len(w) > 2])
+            resume_items[group_key] = items
+        
+        # Find intersection (items present in all resumes)
+        if not resume_items:
+            return []
+        
+        common_items = set.intersection(*resume_items.values())
+        
+        # Build result with metadata
+        results = []
+        for item in common_items:
+            results.append({
+                'item': item,
+                'present_in_all': True,
+                'resume_count': len(resume_items),
+                'type': 'common_skill_or_keyword'
+            })
+        
+        return results
+    
+    @staticmethod
+    def rank_by_relevance(
+        results: List[Tuple[str, Dict[str, Any], float]],
+        top_n: int = 5,
+        group_by_resume: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Rank results by relevance score (Top-N ranking)
+        
+        Args:
+            results: List of (text, metadata, score) tuples
+            top_n: Number of top results to return
+            group_by_resume: Whether to group results by resume and rank resumes
+            
+        Returns:
+            Ranked results with position and score information
+        """
+        if not results:
+            return []
+        
+        if group_by_resume:
+            # Group by resume and calculate aggregate scores
+            resume_scores = defaultdict(lambda: {'score': 0.0, 'count': 0, 'chunks': []})
+            
+            for text, metadata, score in results:
+                resume_id = metadata.get('resume_id', 'unknown')
+                resume_name = metadata.get('resume_name', 'Unknown')
+                candidate_name = metadata.get('candidate_name', resume_name)
+                
+                key = f"{resume_id}|{resume_name}"
+                resume_scores[key]['score'] += score
+                resume_scores[key]['count'] += 1
+                resume_scores[key]['chunks'].append((text, metadata, score))
+                resume_scores[key]['candidate_name'] = candidate_name
+                resume_scores[key]['resume_name'] = resume_name
+            
+            # Calculate average score per resume
+            resume_rankings = []
+            for key, data in resume_scores.items():
+                avg_score = data['score'] / data['count'] if data['count'] > 0 else 0
+                resume_rankings.append({
+                    'resume_id': key.split('|')[0],
+                    'resume_name': data['resume_name'],
+                    'candidate_name': data['candidate_name'],
+                    'average_score': avg_score,
+                    'total_score': data['score'],
+                    'matching_chunks': data['count'],
+                    'top_chunks': data['chunks'][:3]  # Include top 3 matching chunks
+                })
+            
+            # Sort by average score
+            resume_rankings.sort(key=lambda x: x['average_score'], reverse=True)
+            
+            # Add ranking position
+            for rank, item in enumerate(resume_rankings[:top_n], 1):
+                item['rank'] = rank
+            
+            return resume_rankings[:top_n]
+        else:
+            # Simple ranking without grouping
+            sorted_results = sorted(results, key=lambda x: x[2], reverse=True)
+            
+            ranked = []
+            for rank, (text, metadata, score) in enumerate(sorted_results[:top_n], 1):
+                ranked.append({
+                    'rank': rank,
+                    'text': text,
+                    'metadata': metadata,
+                    'score': score
+                })
+            
+            return ranked
+    
+    @staticmethod
+    def deduplicate_results(
+        results: List[Tuple[str, Dict[str, Any], float]],
+        similarity_threshold: float = 0.85
+    ) -> List[Tuple[str, Dict[str, Any], float]]:
+        """
+        Remove duplicate or highly similar results
+        
+        Args:
+            results: List of (text, metadata, score) tuples
+            similarity_threshold: Jaccard similarity threshold for deduplication
+            
+        Returns:
+            Deduplicated results
+        """
+        if not results:
+            return []
+        
+        deduplicated = []
+        seen_signatures = []
+        
+        for text, metadata, score in results:
+            # Create word-based signature for similarity comparison
+            words = set(text.lower().split())
+            
+            # Check against all seen signatures
+            is_duplicate = False
+            for seen_words in seen_signatures:
+                # Calculate Jaccard similarity
+                intersection = len(words & seen_words)
+                union = len(words | seen_words)
+                similarity = intersection / union if union > 0 else 0
+                
+                if similarity >= similarity_threshold:
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                deduplicated.append((text, metadata, score))
+                seen_signatures.append(words)
+        
+        return deduplicated
+
 
 # ============================================================================
 # Google GenAI Wrapper for LangChain Compatibility
@@ -1428,73 +1747,101 @@ class AdvancedRAGEngine:
     def query(self, question: str, k: int = 5, resume_id: Optional[str] = None, 
               resume_name: Optional[str] = None, group_by_resume: bool = True) -> Dict[str, Any]:
         """
-        Enhanced query with classification, expansion, and reranking
+        Enhanced query with intent detection, aggregation, and ranking
         
         Args:
             question: User query
             k: Number of results to retrieve
-            resume_id: Optional resume ID to filter results (for per-resume queries)
+            resume_id: Optional resume ID to filter results
             resume_name: Optional resume name to filter results
-            group_by_resume: Whether to group results by resume in the response
+            group_by_resume: Whether to group results by resume
         """
         start_time = time.time()
         
         try:
-            # ENHANCEMENT 1: Query Classification
+            # ENHANCEMENT 1: Query Intent Detection & Entity Disambiguation
             query_type = QueryExpander.classify_query_type(question)
-            logger.info(f"Query type detected: {query_type}")
+            query_entities = QueryExpander.detect_query_entities(question)
+            logger.info(f"Query type: {query_type}, Entities: {query_entities}")
             
-            # Detect if query is asking for comparison/ranking across resumes
-            is_comparison_query = self._is_comparison_query(question) or query_type == 'comparison'
+            # Detect query category
+            is_comparison_query = self._is_comparison_query(question) or query_type in ['comparison', 'ranking']
+            is_aggregation_query = query_type.startswith('aggregation')
             
-            # ENHANCEMENT 2: Adaptive search weights based on query type
+            # ENHANCEMENT 2: Adaptive search weights
             semantic_weight, bm25_weight = self._determine_search_weights_by_type(question, query_type)
             
-            # ENHANCEMENT 3: Section filtering based on query content
+            # ENHANCEMENT 3: Section filtering based on entities
             section_filter = self._determine_section_filter(question)
+            if query_entities['focus_sections']:
+                section_filter = query_entities['focus_sections']
             
-            # For comparison queries, get more results to ensure we cover multiple resumes
-            search_k = k * 3 if is_comparison_query else k
+            # Adjust search_k based on query type
+            if query_type == 'ranking':
+                search_k = k * 4
+            elif is_aggregation_query or is_comparison_query:
+                search_k = k * 3
+            else:
+                search_k = k
             
-            # ENHANCEMENT 4: Hybrid search with query expansion, reranking, and section filtering
+            # ENHANCEMENT 4: Hybrid search
             results = self.search_engine.search(
-                question, 
-                k=search_k, 
-                semantic_weight=semantic_weight,
-                bm25_weight=bm25_weight,
-                resume_id=resume_id,
-                resume_name=resume_name,
-                use_reranking=True,  # Enable cross-encoder reranking
-                section_filter=section_filter  # Prioritize relevant sections
+                question, k=search_k, semantic_weight=semantic_weight,
+                bm25_weight=bm25_weight, resume_id=resume_id,
+                resume_name=resume_name, use_reranking=True,
+                section_filter=section_filter
             )
             
             if not results:
                 return {
                     'answer': "No relevant documents found.",
                     'source_documents': [],
-                    'processing_time': time.time() - start_time
+                    'processing_time': time.time() - start_time,
+                    'query_type': query_type
                 }
             
-            # Group results by resume if requested or if comparison query
+            # ENHANCEMENT 5: Result Aggregation & Ranking
+            aggregated_results = None
+            ranking_results = None
             grouped_results = None
-            if group_by_resume or is_comparison_query:
+            
+            if group_by_resume or is_comparison_query or is_aggregation_query:
                 grouped_results = self.search_engine.group_results_by_resume(results)
             
-            # Extract pattern insights (with grouping info if available)
-            pattern_insights = self._extract_insights(question, results, grouped_results)
+            # Apply aggregation strategy
+            if query_type == 'aggregation_union':
+                results = ResultAggregator.aggregate_union(results, top_k=search_k)
+                logger.info(f"UNION aggregation: {len(results)} unique results")
+            elif query_type == 'aggregation_intersection' and grouped_results:
+                aggregated_results = ResultAggregator.aggregate_intersection(grouped_results)
+                logger.info(f"INTERSECTION aggregation: {len(aggregated_results)} common items")
+            elif query_type == 'ranking':
+                ranking_results = ResultAggregator.rank_by_relevance(results, top_n=k, group_by_resume=True)
+                logger.info(f"RANKING: Top {len(ranking_results)} candidates")
+            else:
+                results = ResultAggregator.deduplicate_results(results)
             
-            # Generate LLM response with grouping context if available
+            # Extract insights
+            pattern_insights = self._extract_insights(question, results, grouped_results, query_type)
+            
+            # Generate LLM response
             llm_response = ""
             if self.llm:
-                context = self._build_context_for_llm(results, grouped_results, is_comparison_query)
+                context = self._build_context_for_llm(
+                    results, grouped_results, is_comparison_query, 
+                    query_type, ranking_results, aggregated_results
+                )
                 llm_response = self._generate_response(question, context)
             
             # Combine responses
-            final_answer = self._combine_responses(llm_response, pattern_insights, question)
+            final_answer = self._combine_responses(
+                llm_response, pattern_insights, question, 
+                query_type, ranking_results, aggregated_results
+            )
             
             # Prepare source documents
             source_docs = []
-            for text, meta, score in results:
+            for text, meta, score in results[:k]:
                 source_docs.append(Document(
                     page_content=text,
                     metadata={**meta, 'relevance_score': score}
@@ -1506,21 +1853,33 @@ class AdvancedRAGEngine:
                 'answer': final_answer,
                 'source_documents': source_docs,
                 'processing_time': time.time() - start_time,
-                'method': 'enhanced_hybrid_rag_v2',
+                'method': 'enhanced_hybrid_rag_v3_with_aggregation',
                 'query_type': query_type,
+                'query_entities': query_entities,
                 'search_weights': {'semantic': semantic_weight, 'bm25': bm25_weight},
-                'enhancements_used': ['query_expansion', 'cross_encoder_reranking', 'section_filtering', 'adaptive_weights']
+                'enhancements_used': [
+                    'query_intent_detection', 'entity_disambiguation', 
+                    'terminology_normalization', 'query_expansion', 
+                    'cross_encoder_reranking', 'section_filtering', 
+                    'adaptive_weights', 'result_aggregation', 'deduplication'
+                ]
             }
             
-            # Add grouping info if available
+            # Add query-specific data
             if grouped_results:
                 response['grouped_by_resume'] = True
                 response['resume_count'] = len(grouped_results)
+            if ranking_results:
+                response['rankings'] = ranking_results
+            if aggregated_results:
+                response['common_items'] = aggregated_results
             
             return response
         
         except Exception as e:
             logger.error(f"Query error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return {
                 'answer': f"Error: {str(e)}",
                 'source_documents': [],
@@ -1541,50 +1900,70 @@ class AdvancedRAGEngine:
         self, 
         results: List[Tuple[str, Dict, float]], 
         grouped_results: Optional[Dict[str, List[Tuple[str, Dict, float]]]] = None,
-        is_comparison: bool = False
+        is_comparison: bool = False,
+        query_type: str = 'hybrid',
+        ranking_results: Optional[List[Dict[str, Any]]] = None,
+        aggregated_results: Optional[List[Dict[str, Any]]] = None
     ) -> str:
-        """Build context string for LLM with optional grouping and candidate names"""
+        """Build context string for LLM with optional grouping, ranking, and aggregation"""
+        context_parts = []
+        
+        # Add ranking information if available
+        if ranking_results:
+            context_parts.append("RANKING RESULTS (by relevance):")
+            context_parts.append("="*60)
+            for rank_data in ranking_results[:5]:
+                name = rank_data['candidate_name']
+                score = rank_data['average_score']
+                chunks = rank_data['matching_chunks']
+                context_parts.append(f"#{rank_data['rank']}. {name} (Score: {score:.3f}, Matches: {chunks})")
+                # Add top chunk preview
+                if rank_data.get('top_chunks'):
+                    text_preview = rank_data['top_chunks'][0][0][:200]
+                    context_parts.append(f"   Preview: {text_preview}...\n")
+            context_parts.append("")
+        
+        # Add aggregation results if available
+        if aggregated_results:
+            context_parts.append("COMMON ITEMS (intersection across all candidates):")
+            context_parts.append("="*60)
+            for item_data in aggregated_results[:20]:
+                context_parts.append(f"- {item_data['item']} (in {item_data['resume_count']} resumes)")
+            context_parts.append("")
+        
+        # Add grouped results for comparison
         if grouped_results and is_comparison:
-            # Group context by resume for comparison queries - WITH CANDIDATE NAMES
-            context_parts = []
+            context_parts.append("DETAILED CANDIDATE INFORMATION:")
+            context_parts.append("="*80)
             for group_key, group_results in grouped_results.items():
                 resume_id, resume_name = group_key.split('|', 1)
-                
-                # Try to get candidate name from metadata
                 candidate_name = None
                 if group_results:
                     candidate_name = group_results[0][1].get('candidate_name')
-                
-                # Use candidate name if available, otherwise use resume name
                 display_name = candidate_name if candidate_name else resume_name
                 
-                context_parts.append(f"\n{'='*80}")
-                context_parts.append(f"CANDIDATE: {display_name}")
-                context_parts.append(f"Resume File: {resume_name}")
-                context_parts.append(f"{'='*80}\n")
+                context_parts.append(f"\nCANDIDATE: {display_name}")
+                context_parts.append(f"File: {resume_name}")
+                context_parts.append("-"*60)
                 
-                for text, meta, score in group_results[:5]:  # More content per resume
+                for text, meta, score in group_results[:5]:
                     section_type = meta.get('section_type', 'unknown')
                     context_parts.append(f"[{section_type.upper()}]")
                     context_parts.append(f"{text}\n")
-                
-            return '\n'.join(context_parts)
         else:
-            # Standard context format - also include candidate name if available
-            context_parts = []
-            for text, meta, score in results:
+            # Standard context format
+            for text, meta, score in results[:15]:
                 candidate_name = meta.get('candidate_name')
-                resume_name = meta.get('resume_name', 'Unknown Resume')
+                resume_name = meta.get('resume_name', 'Unknown')
                 section_type = meta.get('section_type', 'unknown')
                 
                 if candidate_name:
-                    context_parts.append(f"[Candidate: {candidate_name} | Section: {section_type}]")
+                    context_parts.append(f"[{candidate_name} | {section_type}]")
                 else:
-                    context_parts.append(f"[File: {resume_name} | Section: {section_type}]")
-                
+                    context_parts.append(f"[{resume_name} | {section_type}]")
                 context_parts.append(f"{text}\n")
-            
-            return '\n'.join(context_parts)
+        
+        return '\n'.join(context_parts)
     
     def get_resume_list(self) -> List[Dict[str, str]]:
         """Get list of all indexed resumes with their IDs, names, and candidate names"""
@@ -1709,7 +2088,8 @@ class AdvancedRAGEngine:
         self, 
         question: str, 
         results: List[Tuple[str, Dict, float]], 
-        grouped_results: Optional[Dict[str, List[Tuple[str, Dict, float]]]] = None
+        grouped_results: Optional[Dict[str, List[Tuple[str, Dict, float]]]] = None,
+        query_type: str = 'hybrid'
     ) -> str:
         """Extract structured insights from results with candidate names and grouping"""
         question_lower = question.lower()
@@ -1853,26 +2233,47 @@ ANSWER:"""
             
             return ""
     
-    def _combine_responses(self, llm_response: str, pattern_insights: str, question: str) -> str:
-        """Combine LLM and pattern-based insights"""
-        if not llm_response and not pattern_insights:
+    def _combine_responses(
+        self, llm_response: str, pattern_insights: str, question: str,
+        query_type: str = 'hybrid',
+        ranking_results: Optional[List[Dict[str, Any]]] = None,
+        aggregated_results: Optional[List[Dict[str, Any]]] = None
+    ) -> str:
+        """Combine LLM response with insights, adding ranking/aggregation summaries"""
+        parts = []
+        
+        # Add ranking summary if available
+        if ranking_results and query_type == 'ranking':
+            parts.append("## Top Ranked Candidates\n")
+            for rank_data in ranking_results[:5]:
+                name = rank_data['candidate_name']
+                score = rank_data['average_score']
+                parts.append(f"{rank_data['rank']}. **{name}** - Relevance Score: {score:.2f}")
+            parts.append("\n---\n")
+        
+        # Add aggregation summary if available
+        if aggregated_results and 'intersection' in query_type:
+            parts.append("## Common Skills/Attributes\n")
+            common_items = [item['item'] for item in aggregated_results[:15]]
+            parts.append(", ".join(common_items))
+            parts.append("\n---\n")
+        
+        # Add LLM response
+        if llm_response and llm_response.strip():
+            if not parts:
+                parts.append("## Answer\n")
+            parts.append(llm_response)
+        
+        # Add pattern insights
+        if pattern_insights and pattern_insights.strip():
+            if llm_response:
+                parts.append("\n## Additional Insights\n")
+            parts.append(pattern_insights)
+        
+        if not parts:
             return "Unable to generate response."
         
-        if not llm_response:
-            return f"## Analysis\n\n{pattern_insights}"
-        
-        if not pattern_insights:
-            return f"## Answer\n\n{llm_response}"
-        
-        return f"""## Comprehensive Analysis
-
-{llm_response}
-
----
-
-## Additional Insights
-
-{pattern_insights}"""
+        return "\n".join(parts)
     
     def get_stats(self) -> Dict[str, Any]:
         """Get system statistics"""

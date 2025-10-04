@@ -19,11 +19,19 @@ faiss-cpu>=1.7.4
 rank-bm25>=0.2.2
 qdrant-client>=1.7.0
 
-# LangChain (Core + Google Gemini)
+# LangChain Core
 langchain>=0.1.0
 langchain-core>=0.1.0
 langchain-community>=0.0.20
+
+# LLM Providers
 google-genai>=0.2.0
+
+# LangChain LLM Integrations (Optional - install as needed)
+# langchain-openai>=0.0.5        # For OpenAI GPT models
+# langchain-anthropic>=0.1.0     # For Anthropic Claude models
+# langchain-groq>=0.0.1          # For Groq models
+# langchain-huggingface>=0.0.1   # For HuggingFace models
 
 # NLP & ML
 numpy>=1.24.0

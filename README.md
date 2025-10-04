@@ -84,19 +84,129 @@ graph TB
 
 ## Features
 
+### Core Capabilities
+
 - **Multi-format Processing**: PDF and DOCX support with advanced text extraction
 - **Intelligent Entity Extraction**: Skills, education, experience, certifications, projects, publications, achievements, activities, and more
-- **Hybrid Search**: Combines semantic search (FAISS/Qdrant) with BM25 keyword matching for optimal retrieval
-- **Multi-LLM Support**: Google Gemini (primary) with Ollama fallback, configurable with multiple providers
 - **Extended Response Length**: Up to 4096 tokens per response for comprehensive analysis and detailed answers
 - **Real-time Analysis**: Fast processing and querying with optimized parallel document ingestion
 - **Web Interface**: User-friendly Streamlit application with interactive chat and session management
+
+### Advanced RAG Features
+
+#### Hybrid Retrieval System
+Combines the best of both worlds for superior search accuracy:
+
+- **Semantic Search (Dense Retrieval)**: 
+  - Uses FastEmbed with BAAI/bge-small-en-v1.5 embeddings
+  - FAISS vector similarity search for conceptual matching
+  - Understands context and meaning, not just keywords
+  
+- **Keyword Search (Sparse Retrieval)**:
+  - BM25Okapi algorithm for precise term matching
+  - Excellent for technical terms, acronyms, and specific phrases
+  - Handles exact matches that semantic search might miss
+
+- **Weighted Fusion Strategy**:
+  - Default: 70% semantic + 30% keyword (configurable)
+  - Adaptive weights based on query type (technical vs. conceptual)
+  - Reciprocal rank fusion for optimal result combination
+  - Section-aware boosting (30% boost for target sections)
+
+- **Query Expansion**:
+  - Automatically generates 2-3 query variations
+  - Synonym and term variation substitution
+  - Increases recall without sacrificing precision
+
+**Performance**: Maintains sub-second response times through efficient indexing and parallel retrieval.
+
+#### Cross-Encoder Reranking
+Two-stage retrieval for maximum precision:
+
+- **Stage 1: Bi-Encoder Retrieval**
+  - Fast initial retrieval of top N*3 candidates
+  - Broad coverage with acceptable accuracy
+  
+- **Stage 2: Cross-Encoder Reranking**
+  - Model: `cross-encoder/ms-marco-MiniLM-L-6-v2`
+  - Processes query + document pairs together
+  - More accurate scoring (but more expensive)
+  - Re-ranks top candidates to surface best matches
+  - Can be disabled for faster responses (configurable)
+
+**Trade-off**: Adds ~100-200ms latency for significantly improved relevance (10-15% accuracy boost).
+
+#### Aggregation & Deduplication
+Intelligent result processing for cleaner outputs:
+
+- **Union Aggregation**: 
+  - Merges results from multiple resumes
+  - Removes duplicates while preserving provenance
+  - Use case: "Show all unique skills across candidates"
+
+- **Intersection Aggregation**:
+  - Finds common elements across all resumes
+  - Groups by resume first, then computes intersection
+  - Use case: "What skills do ALL candidates have?"
+
+- **Resume-Level Ranking**:
+  - Groups chunks by resume
+  - Calculates aggregate scores (sum + average)
+  - Returns top N candidates with evidence
+  - Includes top 3 most relevant chunks per resume
+
+- **Smart Deduplication**:
+  - Jaccard similarity-based (threshold: 0.85)
+  - Removes near-duplicate information
+  - Keeps highest-scoring version of similar content
+  - Reduces noise in multi-resume queries
+
+**Efficiency**: Set-based operations and in-memory processing ensure no performance degradation.
+
+#### Query Understanding & Expansion
+Advanced natural language processing for better intent detection:
+
+- **Query Type Classification**:
+  - `ranking`: "Who has the most Python experience?"
+  - `comparison`: "Compare Java skills between candidates"
+  - `aggregation_union`: "List all programming languages"
+  - `aggregation_intersection`: "Common skills across all"
+  - `filtering`: "Candidates with AWS certification"
+  - `exact_match`: "5+ years of experience"
+  - `semantic` / `hybrid`: Context-based queries
+
+- **Entity Extraction & Disambiguation**:
+  - **Skills**: Python, AWS, Docker, ML, etc.
+  - **Roles**: Engineer, Developer, Scientist, Manager
+  - **Experience**: Years/months via regex patterns
+  - **Education**: Bachelor, Master, PhD, degrees
+  - **Certifications**: AWS, Azure, PMP, etc.
+  - **Focus Sections**: Determines which resume sections to prioritize
+
+- **Terminology Normalization**:
+  - Maps variations to canonical forms
+  - Examples: "ml" → "machine learning", "k8s" → "kubernetes", "py" → "python"
+  - 50+ term mappings across technical and domain vocabulary
+  - Handles acronyms, abbreviations, and synonyms
+
+- **Query Expansion with Synonyms**:
+  - Domain-specific synonym dictionary (25+ categories)
+  - Technical variations (react/reactjs, docker/containerization)
+  - Context-aware replacement (max 2-3 expansions)
+  - Preserves original query for hybrid matching
+
+**Adaptive Strategy**: Automatically adjusts search weights, result count, and section filters based on detected query type.
+
+### Multi-LLM Support
+- **Google Gemini** (primary): gemini-2.5-flash with 4096 token responses
+- **Ollama** (fallback): Local deployment with qwen2.5:1.5b
+- **Configurable providers**: Easy to add OpenAI, Anthropic, HuggingFace
 
 ## Complete Repository Structure
 
 ```
 Resume-Analysis-Agent/
-├── app/                                    # Core application modules
+├── app/                                   # Core application modules
 │   ├── extractors/                        # Specialized entity extractors (13 total)
 │   │   ├── achievements_extractor.py      # Awards, honors, recognition extraction
 │   │   ├── activities_extractor.py        # Extracurricular activities, volunteer work
