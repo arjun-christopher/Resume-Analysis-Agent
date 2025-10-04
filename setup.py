@@ -111,7 +111,7 @@ LLM_FALLBACK_ORDER=google,ollama
 
 # LLM Parameters
 LLM_TEMPERATURE=0.1
-LLM_MAX_TOKENS=2048
+LLM_MAX_TOKENS=4096
 LLM_TIMEOUT=30
 
 # ============================================================================
@@ -181,7 +181,7 @@ def create_data_directories():
         "data",
         "data/uploads",
         "data/index",
-        "data/advanced_rag"
+        "data/cache"
     ]
     
     for dir_path in directories:
@@ -277,7 +277,7 @@ def setup_gemini():
 
 def print_next_steps():
     """Print next steps for the user"""
-    print_header("Setup Complete! 🎉")
+    print_header("Setup Complete")
     
     print(f"{Colors.BOLD}Next Steps:{Colors.ENDC}\n")
     
