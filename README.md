@@ -479,3 +479,20 @@ For questions, issues, or feature requests:
     - API design and interface implementation
     - Testing, debugging, and troubleshooting
   - **Code Documentation**: Inline docstrings in source files
+
+## Disclaimer
+
+**Educational Purpose**: This project was developed for educational and learning purposes to demonstrate the practical application of Retrieval-Augmented Generation (RAG) technology, natural language processing, and AI-powered document analysis.
+
+**Accuracy**: While the system strives for high accuracy in resume parsing and analysis, results may vary depending on:
+- Resume format and structure
+- Document quality and clarity
+- Complexity of content
+- Language variations and terminology
+
+**Development Status**: This is an ongoing project that may be upgraded and improved over time. Future enhancements may include:
+- Additional extraction capabilities
+- Enhanced accuracy and performance
+- Support for more document formats
+- Advanced AI model integrations
+- Extended platform support
